@@ -66,11 +66,10 @@ koya help [コマンド]
 
 | 名前 | 内容 |
 |---|---|
-| `base` | Debian stable + git, curl, jq, sudo など |
-| `python` | base + python3, pip, venv, uv |
+| `base` | Fedora 最新版 + git, curl, jq, sudo など（dnf が使える） |
+| `python` | base + python3, pip, venv, uv, gcc |
 | `node` | base + Node.js LTS, npm, corepack |
-| `go` | base + Go 最新安定版 |
-| `fedora` | Fedora 最新版 + git, curl, jq, sudo など（base とは独立。dnf が使える） |
+| `go` | base + Go 最新安定版, gcc |
 
 ### 自分でプロファイルを追加する
 
@@ -80,9 +79,8 @@ koya help [コマンド]
 ```dockerfile
 # ~/.config/koya/profiles/db/Dockerfile
 FROM localhost/koya/python
-RUN apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client sqlite3 \
- && rm -rf /var/lib/apt/lists/*
+RUN dnf install -y postgresql sqlite \
+ && dnf clean all
 ```
 
 `FROM localhost/koya/<名前>` と書くと、そのプロファイルを先にビルドしてから引き継ぎます。

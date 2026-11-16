@@ -63,11 +63,10 @@ koya-<プロファイル>-<ディレクトリ名>-<絶対パスの SHA-256 先�
 
 | 名前 | ベース | 内容 |
 |---|---|---|
-| `base` | debian:stable-slim | git, curl, ca-certificates, sudo, less, vim, jq など共通ツール |
-| `python` | base | python3, pip, venv, uv |
+| `base` | fedora:latest | git, curl, ca-certificates, sudo, less, vim, jq など共通ツール |
+| `python` | base | python3, pip, venv, uv, gcc（C 拡張のビルド用） |
 | `node` | base | Node.js LTS, npm |
-| `go` | base | Go 最新安定版 |
-| `fedora` | fedora:latest | base と同じ共通ツールと `dev` ユーザー。base とは独立 |
+| `go` | base | Go 最新安定版, gcc（cgo 用） |
 
 - プロファイルは `profiles/<名前>/Dockerfile` に置き、`go:embed` でバイナリに埋め込む。
 - `base` 以外は `FROM localhost/koya/base` で base を引き継ぐ。依存するイメージは自動で先にビルドする。
@@ -138,11 +137,10 @@ koya/
 ├── internal/profile/       プロファイルの解決、埋め込み、ビルド
 ├── internal/container/     名前付け、作成、exec、ls/stop/rm
 ├── profiles/               同梱プロファイル（go:embed 対象）
-│   ├── base/Dockerfile
+│   ├── base/Dockerfile, bashrc
 │   ├── python/Dockerfile
 │   ├── node/Dockerfile
-│   ├── go/Dockerfile
-│   └── fedora/Dockerfile, bashrc
+│   └── go/Dockerfile
 └── docs/design.md
 ```
 

@@ -2,9 +2,8 @@
 FROM docker.io/library/node:lts-slim AS node
 
 FROM localhost/koya/base
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libatomic1 \
- && rm -rf /var/lib/apt/lists/*
+RUN dnf install -y --setopt=install_weak_deps=False libatomic libstdc++ \
+ && dnf clean all
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node /usr/local/include/node /usr/local/include/node
