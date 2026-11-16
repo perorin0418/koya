@@ -23,6 +23,7 @@ import (
 	"github.com/perorin0418/koya/internal/container"
 	"github.com/perorin0418/koya/internal/profile"
 	"github.com/perorin0418/koya/internal/runtime"
+	"github.com/perorin0418/koya/internal/selfupdate"
 )
 
 // version はビルド時に -ldflags "-X main.version=..." で埋め込む。
@@ -38,6 +39,7 @@ const usage = `koya - カレントディレクトリをマウントした用途�
   koya rm [-f] [プロファイル]     削除する（省略時はこのディレクトリの全プロファイル）
   koya profiles                  使えるプロファイルの一覧
   koya build [プロファイル...]    イメージをビルドし直す（省略時は全プロファイル）
+  koya self-update [--check]     koya 本体を最新版に更新する（--check は確認だけ）
   koya version                   バージョンを表示する
   koya help [コマンド]            ヘルプを表示する
 
@@ -87,6 +89,7 @@ const configUsage = `設定ファイル: ~/.config/koya/config（$XDG_CONFIG_HOM
 `
 
 func main() {
+	selfupdate.CleanupOld()
 	if err := run(os.Args[1:]); err != nil {
 		var ee exitError
 		if errors.As(err, &ee) {
@@ -122,6 +125,8 @@ func run(args []string) error {
 		return cmdProfiles(rest)
 	case "build":
 		return cmdBuild(rest)
+	case "self-update":
+		return cmdSelfUpdate(rest)
 	case "version", "--version":
 		fmt.Println("koya", getVersion())
 		return nil
@@ -770,4 +775,62 @@ func cmdAttach(args []string) error {
 		}
 	}
 	return rt.Exec(container.ExecArgs(name, wd, true, container.AttachCommand(sess))...)
+}
+
+func cmdSelfUpdate(args []string) error {
+	const help = "使い方: koya self-update [--check] [--force]\n\n" +
+		"GitHub Releases から koya の最新版を取ってきて、今の実行ファイルと入れ替えます。\n\n" +
+		"  --check   新しい版があるかを確かめるだけで、入れ替えない\n" +
+		"  --force   最新版と同じ版や、版が分からない（開発版の）場合も入れ替える\n"
+	fs := newFlagSet("self-update")
+	check := fs.Bool("check", false, "")
+	force := fs.Bool("force", false, "")
+	pos, err := parseInterspersed(fs, args)
+	if err != nil {
+		return flagErr(err, help)
+	}
+	if len(pos) > 0 {
+		return errors.New(help)
+	}
+	cur := getVersion()
+	rel, err := selfupdate.Latest()
+	if err != nil {
+		return err
+	}
+	cmp, known := selfupdate.Compare(cur, rel.Tag)
+	newer := known && cmp < 0
+	if *check {
+		switch {
+		case !known:
+			fmt.Printf("今の版: %s（開発版のため比べられません）、最新版: %s\n", cur, rel.Tag)
+		case newer:
+			fmt.Printf("新しい版があります: %s → %s（koya self-update で更新できます）\n", cur, rel.Tag)
+		default:
+			fmt.Printf("最新です（%s）\n", cur)
+		}
+		return nil
+	}
+	if !*force {
+		if !known {
+			return fmt.Errorf("今の koya の版（%s）が分からないため、更新するか判断できません。最新版 %s に入れ替えるなら --force を付けてください", cur, rel.Tag)
+		}
+		if !newer {
+			fmt.Printf("最新です（%s）\n", cur)
+			return nil
+		}
+	}
+	exe, err := selfupdate.Executable()
+	if err != nil {
+		return fmt.Errorf("今の実行ファイルの場所が分かりません: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "koya: %s を取ってきます\n", rel.Tag)
+	bin, err := selfupdate.Download(rel)
+	if err != nil {
+		return err
+	}
+	if err := selfupdate.Replace(exe, bin); err != nil {
+		return err
+	}
+	fmt.Printf("koya を更新しました: %s → %s（%s）\n", cur, rel.Tag, exe)
+	return nil
 }

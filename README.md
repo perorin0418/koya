@@ -23,6 +23,17 @@ podman か docker が必要です。Linux・macOS・Windows で動きます。
 go install github.com/perorin0418/koya/cmd/koya@latest
 ```
 
+### 更新
+
+```bash
+koya self-update           # 最新版に入れ替える
+koya self-update --check   # 新しい版があるかだけ確かめる
+```
+
+GitHub Releases から今の OS・CPU 向けのファイルを取ってきて、`checksums.txt` で中身を確かめてから入れ替えます。
+`/usr/local/bin` など書き込めない場所に置いている場合は `sudo koya self-update` を使ってください。
+イメージ（Fedora のパッケージや Claude Code など）を新しくするには、別に `koya build` を使います。
+
 ## 使い方
 
 ```
@@ -33,6 +44,7 @@ koya stop [プロファイル]        停止する（省略時はこのディレ
 koya rm [-f] [プロファイル]     削除する（省略時はこのディレクトリの全プロファイル）
 koya profiles                  使えるプロファイルの一覧
 koya build [プロファイル...]    イメージをビルドし直す（省略時は全プロファイル）
+koya self-update [--check]     koya 本体を最新版に更新する
 koya version
 koya help [コマンド]
 ```

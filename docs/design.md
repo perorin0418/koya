@@ -143,6 +143,7 @@ koya stop [プロファイル]       停止する（省略時はこのディレ�
 koya rm [プロファイル] [-f]    削除する（省略時はこのディレクトリの全プロファイル）
 koya profiles                 使えるプロファイルの一覧
 koya build [プロファイル]      イメージをビルド/再ビルドする
+koya self-update [--check]    koya 本体を最新版に更新する
 koya version
 koya help [コマンド]
 ```
@@ -190,6 +191,18 @@ koya run python
 - tmux を選んだ理由: つなぎ直したときに画面全体を描き直してくれる（dtach などは画面を復元しない）。
   画面を読んで状態を判定するツール（nagaya）とも組み合わせられる
 
+## 本体の更新（self-update）
+
+`koya self-update` で、GitHub Releases の最新版に入れ替える。
+
+- `https://api.github.com/repos/perorin0418/koya/releases/latest` で最新版を調べ、今の OS・CPU 向けのアーカイブ
+  （`koya_<版>_<OS>_<CPU>.tar.gz`、Windows は `.zip`）を取ってくる。`GITHUB_TOKEN` があれば API に付ける（回数制限の対策）
+- `checksums.txt` の SHA-256 と照らし合わせてから展開する。合わなければ何もしない
+- 実行ファイル（シンボリックリンクはたどる）と同じディレクトリに一時ファイルを書き、名前を変えて入れ替える。途中で失敗しても元のファイルは壊れない
+- Windows は実行中のファイルを上書きできないので、元のファイルを `koya.exe.old` に退避してから置き換え、次の起動時に `.old` を消す
+- 今の版が最新版と同じか新しければ何もしない。版が分からない（`dev` など）場合は `--force` を求める。`--check` は確認だけ
+- 名前を `upgrade` にしなかったのは、イメージやコンテナの更新と区別するため（`upgrade` は将来そちらに使える）
+
 ## Windows 対応
 
 Docker Desktop / Podman Desktop（podman machine）を前提に、Windows でもネイティブに動かす。
@@ -214,6 +227,7 @@ koya/
 ├── cmd/koya/main.go        エントリポイント、コマンドの振り分け
 ├── internal/runtime/       podman/docker の検出と呼び出し
 ├── internal/config/        設定ファイルの読み込み
+├── internal/selfupdate/    本体の更新（self-update）
 ├── internal/profile/       プロファイルの解決、埋め込み、ビルド
 ├── internal/container/     名前付け、作成、exec、ls/stop/rm
 ├── scripts/build-release.sh  リリース用バイナリの作成
