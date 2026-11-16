@@ -171,6 +171,23 @@ koya run python
 コンテナは `sleep infinity` で常駐させ、操作はすべて `exec` で行う。複数の端末から同じ環境に入れる。
 （PID 1 にはランタイムの `--init` を使い、ゾンビプロセスを回収させる）
 
+## Windows 対応
+
+Docker Desktop / Podman Desktop（podman machine）を前提に、Windows でもネイティブに動かす。
+
+| 項目 | Linux / macOS | Windows |
+|---|---|---|
+| コンテナへの入り方 | `syscall.Exec` で koya のプロセスを `docker exec` に置き換える | 置き換えができないので子プロセスとして実行し、その終了コードで終わる（Ctrl-C は子に任せる） |
+| 作業ディレクトリのパス | ホストと同じパス | `C:\Users\me\src` → `/c/Users/me/src` |
+| マウントのオプション | Linux は `:z`（SELinux のラベル付け替え） | 付けない（VM が仲介するため） |
+| ユーザー | ホストの名前・UID・GID・ホームのパス | 名前は Windows のユーザー名を Linux で使える形にしたもの、UID/GID は 1000、ホームは `/home/<名前>` |
+| 設定ディレクトリ | `~/.config/koya` | `%APPDATA%\koya` |
+| 永続ホームの既定 | `~/.local/share/koya/home` | `%LOCALAPPDATA%\koya\home` |
+
+- ネットワーク上のパス（UNC）とドライブの最上位は拒否する。
+- Windows のファイルは Docker Desktop / podman machine 経由でマウントされ、コンテナ内からは書き込めるように見える
+  （所有者の厳密な対応は VM 側に任せる）。
+
 ## リポジトリ構成
 
 ```
@@ -180,6 +197,7 @@ koya/
 ├── internal/config/        設定ファイルの読み込み
 ├── internal/profile/       プロファイルの解決、埋め込み、ビルド
 ├── internal/container/     名前付け、作成、exec、ls/stop/rm
+├── scripts/build-release.sh  リリース用バイナリの作成
 ├── profiles/               同梱プロファイル（go:embed 対象）
 │   ├── base/Dockerfile, bashrc
 │   ├── python/Dockerfile
@@ -190,7 +208,8 @@ koya/
 ```
 
 インストールは `go install github.com/perorin0418/koya/cmd/koya@latest`、
-または GitHub Releases に置くバイナリ（後で GoReleaser で用意する）。
+または GitHub Releases に置くバイナリ。リリース用のバイナリは `scripts/build-release.sh <バージョン>` で作る
+（Linux・macOS は tar.gz、Windows は zip）。
 
 ## 今回は対象外（あとで検討）
 

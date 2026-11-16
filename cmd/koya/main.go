@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	goruntime "runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -67,7 +68,7 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
 永続ホームの置き場所などは ~/.config/koya/config で設定します（koya help config）。
 `
 
-const configUsage = `設定ファイル: ~/.config/koya/config（$XDG_CONFIG_HOME/koya/config）
+const configUsage = `設定ファイル: ~/.config/koya/config（$XDG_CONFIG_HOME/koya/config、Windows は %APPDATA%\koya\config）
 
 「キー = 値」の形で書きます。# 以降はコメントです。
 
@@ -350,6 +351,9 @@ func hostUser() (container.User, error) {
 	if err != nil {
 		return container.User{}, fmt.Errorf("ユーザー情報を取得できません: %w", err)
 	}
+	if goruntime.GOOS == "windows" {
+		return windowsUser(u.Username), nil
+	}
 	uid, err1 := strconv.Atoi(u.Uid)
 	gid, err2 := strconv.Atoi(u.Gid)
 	if err1 != nil || err2 != nil {
@@ -373,8 +377,11 @@ func workdir() (string, error) {
 
 // checkWorkdir はマウントすると危ないディレクトリを拒否する。
 func checkWorkdir(wd string) error {
-	if wd == "/" {
-		return errors.New("/ はマウントできません。プロジェクトのディレクトリで実行してください")
+	if filepath.Dir(wd) == wd {
+		return fmt.Errorf("%s（ドライブやファイルシステムの最上位）はマウントできません。プロジェクトのディレクトリで実行してください", wd)
+	}
+	if goruntime.GOOS == "windows" && strings.HasPrefix(wd, `\\`) {
+		return errors.New("ネットワーク上のパス（\\\\server\\share）はマウントできません。ローカルのドライブで実行してください")
 	}
 	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == wd {
 		return errors.New("ホームディレクトリそのものはマウントできません（隔離にならないため）。プロジェクトのディレクトリで実行してください")
@@ -627,4 +634,34 @@ func cmdBuild(args []string) error {
 		built[n] = true
 	}
 	return nil
+}
+
+// windowsUser は Windows のユーザーから、コンテナ内で使うユーザーを作る。
+// Windows には UID/GID がないため 1000:1000 を使い、名前は Linux で使える形に直す
+// （例: DOMAIN\Taro.Yamada → taro.yamada、ホームは /home/taro.yamada）。
+func windowsUser(username string) container.User {
+	if i := strings.LastIndex(username, `\`); i >= 0 {
+		username = username[i+1:]
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(username) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	name := b.String()
+	if strings.Trim(name, "_-.") == "" {
+		// 日本語の名前など、使える文字が残らない場合
+		name = "user"
+	}
+	if !(name[0] >= 'a' && name[0] <= 'z' || name[0] == '_') {
+		name = "u" + name
+	}
+	if len(name) > 32 {
+		name = name[:32]
+	}
+	return container.User{Name: name, UID: 1000, GID: 1000, Home: "/home/" + name}
 }

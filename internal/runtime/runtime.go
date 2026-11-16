@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // Runtime は検出したコンテナランタイム。
@@ -86,10 +85,4 @@ func (r *Runtime) Run(args ...string) error {
 func (r *Runtime) Quiet(args ...string) error {
 	_, err := r.Output(args...)
 	return err
-}
-
-// Exec は現在のプロセスをランタイムのコマンドに置き換える（TTY やシグナルをそのまま渡すため）。
-func (r *Runtime) Exec(args ...string) error {
-	argv := append([]string{r.Bin}, args...)
-	return syscall.Exec(r.Bin, argv, os.Environ())
 }

@@ -192,7 +192,7 @@ type User struct {
 	Name string
 	UID  int
 	GID  int
-	Home string // コンテナ内のホームディレクトリ（ホストと同じパス）
+	Home string // コンテナ内のホームディレクトリ（Linux / macOS ではホストと同じパス）
 }
 
 // Spec はコンテナ作成に必要な情報。
@@ -206,10 +206,8 @@ type Spec struct {
 
 // RunArgs は run コマンドの共通引数（イメージ名の手前まで）を返す。
 func RunArgs(rt *runtime.Runtime, s Spec) []string {
-	mount := s.Workdir + ":" + s.Workdir + ":z"
-	if s.Opts.ReadOnly {
-		mount = s.Workdir + ":" + s.Workdir + ":ro,z"
-	}
+	ctrWorkdir := ContainerPath(s.Workdir)
+	mount := s.Workdir + ":" + ctrWorkdir + mountSuffix(s.Opts.ReadOnly)
 	args := []string{
 		"--label", LabelManaged + "=true",
 		"--label", LabelProfile + "=" + s.Profile,
@@ -224,9 +222,9 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 	}
 	// ホームを先にマウントし、作業ディレクトリがホームの下にあっても上から重ねられるようにする
 	if s.Opts.Home != "" {
-		args = append(args, "-v", s.Opts.Home+":"+s.User.Home+":z")
+		args = append(args, "-v", s.Opts.Home+":"+s.User.Home+mountSuffix(false))
 	}
-	args = append(args, "-v", mount, "-w", s.Workdir)
+	args = append(args, "-v", mount, "-w", ctrWorkdir)
 	args = append(args, userArgs(rt, s.User)...)
 	if s.Opts.Net != "" {
 		args = append(args, "--network", s.Opts.Net)
@@ -328,7 +326,7 @@ func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
 	return nil
 }
 
-// ExecArgs は exec コマンドの引数を返す。
+// ExecArgs は exec コマンドの引数を返す。workdir はホストのパス。
 func ExecArgs(name, workdir string, tty bool, cmd []string) []string {
 	args := []string{"exec", "-i"}
 	if tty {
@@ -337,7 +335,7 @@ func ExecArgs(name, workdir string, tty bool, cmd []string) []string {
 			args = append(args, "-e", "TERM="+term)
 		}
 	}
-	args = append(args, "-w", workdir, name)
+	args = append(args, "-w", ContainerPath(workdir), name)
 	return append(args, cmd...)
 }
 

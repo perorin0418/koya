@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 )
 
@@ -23,9 +24,13 @@ type Config struct {
 	Path       string   // 読み込んだファイル（なければ空）
 }
 
-// Dir は設定ディレクトリ（~/.config/koya）。
+// Dir は設定ディレクトリ。
+// Linux / macOS: $XDG_CONFIG_HOME/koya（既定 ~/.config/koya）、Windows: %APPDATA%\koya
 func Dir() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" && goruntime.GOOS == "windows" {
+		base, _ = os.UserConfigDir()
+	}
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -36,9 +41,13 @@ func Dir() string {
 	return filepath.Join(base, "koya")
 }
 
-// DefaultHomeDir は永続ホームの既定の置き場所（~/.local/share/koya/home）。
+// DefaultHomeDir は永続ホームの既定の置き場所。
+// Linux / macOS: $XDG_DATA_HOME/koya/home（既定 ~/.local/share/koya/home）、Windows: %LOCALAPPDATA%\koya\home
 func DefaultHomeDir() string {
 	base := os.Getenv("XDG_DATA_HOME")
+	if base == "" && goruntime.GOOS == "windows" {
+		base = os.Getenv("LOCALAPPDATA")
+	}
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {

@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/perorin0418/koya/internal/config"
 	"github.com/perorin0418/koya/internal/runtime"
 )
 
@@ -61,17 +62,13 @@ func NewStore(builtin fs.FS) *Store {
 	return &Store{builtin: builtin, userDir: UserDir(), cache: map[string]*Profile{}, hashes: map[string]string{}}
 }
 
-// UserDir はユーザー定義プロファイルのディレクトリ。
+// UserDir はユーザー定義プロファイルのディレクトリ（設定ディレクトリの下の profiles）。
 func UserDir() string {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		base = filepath.Join(home, ".config")
+	dir := config.Dir()
+	if dir == "" {
+		return ""
 	}
-	return filepath.Join(base, "koya", "profiles")
+	return filepath.Join(dir, "profiles")
 }
 
 // Names は使えるプロファイル名を並べて返す。

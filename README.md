@@ -16,7 +16,8 @@ python   running  koya-python-myapp-3fa2b91c
 
 ## インストール
 
-podman か docker が必要です。
+podman か docker が必要です。Linux・macOS・Windows で動きます。
+[Releases](https://github.com/perorin0418/koya/releases) からバイナリを取ってくるか、Go で入れます。
 
 ```bash
 go install github.com/perorin0418/koya/cmd/koya@latest
@@ -125,6 +126,31 @@ RUN dnf install -y postgresql sqlite \
 
 - `$HOME` の下には何も入れないでください（ユーザーは koya が作成時に登録し、永続ホームでも隠れるため）。
 - `LABEL koya.home="true"` を付けると、そのプロファイルでは永続ホームが既定で有効になります。
+
+## Windows
+
+Windows では、Docker Desktop か Podman Desktop（podman machine）で動きます。
+PowerShell やコマンドプロンプトから、Linux と同じように使えます。
+
+```powershell
+cd C:\Users\me\src\myapp
+koya run python
+```
+
+Linux・macOS との違い:
+
+| 項目 | Windows での扱い |
+|---|---|
+| コンテナ内の作業ディレクトリ | `C:\Users\me\src\myapp` → `/c/Users/me/src/myapp` に変換してマウントする |
+| コンテナ内のユーザー | Windows のユーザー名を Linux で使える形にしたもの（例: `taro.yamada`）、UID/GID は 1000、ホームは `/home/<名前>` |
+| 設定ファイル | `%APPDATA%\koya\config` |
+| ユーザー定義プロファイル | `%APPDATA%\koya\profiles\<名前>\Dockerfile` |
+| 永続ホームの既定の置き場所 | `%LOCALAPPDATA%\koya\home` |
+
+- ネットワーク上のパス（`\\server\share`）やドライブの最上位（`C:\`）では実行できません。
+- Git Bash（mintty）では端末として認識されず、対話シェルに入れないことがあります。
+  その場合は Windows Terminal を使うか、`winpty koya run` で起動してください。
+- WSL2 の中で Linux 版を使うこともできます。プロジェクトを WSL2 側（`/home/...`）に置くと、ファイルのアクセスが速くなります。
 
 ## 環境変数
 
