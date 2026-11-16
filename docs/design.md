@@ -100,7 +100,7 @@ home.scope  = shared                # shared / project
 
 | 名前 | ベース | 内容 |
 |---|---|---|
-| `base` | fedora:latest | git, curl, ca-certificates, sudo, less, vim, jq など共通ツール |
+| `base` | fedora:latest | git, curl, ca-certificates, sudo, less, vim, jq, tmux など共通ツール |
 | `python` | base | python3, pip, venv, uv, gcc（C 拡張のビルド用） |
 | `node` | base | Node.js LTS, npm |
 | `go` | base | Go 最新安定版, gcc（cgo 用） |
@@ -137,7 +137,8 @@ home.scope  = shared                # shared / project
 
 ```
 koya run [プロファイル] [オプション] [-- コマンド...]   環境に入る / コマンドを実行する
-koya ls [-a]                  このディレクトリのコンテナ一覧（-a で全ディレクトリ）
+koya attach [プロファイル] [セッション]  セッションにつなぎ直す
+koya ls [-a]                  このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
 koya stop [プロファイル]       停止する（省略時はこのディレクトリの全プロファイル）
 koya rm [プロファイル] [-f]    削除する（省略時はこのディレクトリの全プロファイル）
 koya profiles                 使えるプロファイルの一覧
@@ -170,6 +171,24 @@ koya run python
 
 コンテナは `sleep infinity` で常駐させ、操作はすべて `exec` で行う。複数の端末から同じ環境に入れる。
 （PID 1 にはランタイムの `--init` を使い、ゾンビプロセスを回収させる）
+
+## セッション
+
+端末が切れても、コンテナ内のコマンドが動き続け、あとでつなぎ直せるようにする。
+
+- `koya run ... --session[=名前]` で、コマンドをコンテナ内の tmux のセッションの中で動かす。
+  `tmux new-session -A -D -s <名前> -- <コマンド>` を使い、同名のセッションがあれば新しく起動せずにつなぐ
+- `koya attach [プロファイル] [セッション]` で既存のセッションにつなぐ（`tmux attach-session -d`）
+- つなぐときはほかのクライアントを切り離す（`-D` / `-d`）。docker / podman の `exec` は、手元の端末が切れても
+  コンテナ内のプロセス（tmux のクライアント）が残るため、つなぎ直すたびに古いクライアントを片付ける
+- `koya ls` の SESSIONS 列に、起動中のコンテナのセッションを出す（`*` はクライアントがつながっている）
+- tmux の設定は base イメージの `/etc/koya/tmux.conf`。ステータス行なし（画面の行数を変えない）、マウスでスクロール、
+  24bit カラー、OSC 52 のクリップボード。コマンドなしで始めたときは koya のプロンプト付きの bash
+- 手元の端末の種類（`TERM`）の定義がコンテナにないと tmux が起動しないので、そのときは `xterm-256color` にする
+- セッション名の既定はコマンド名（なければ `shell`）。tmux で使えない `.` と `:` は `-` に置き換える
+- セッションには端末が必要（`ssh` なら `-t`）。`--rm` とは同時に使えない
+- tmux を選んだ理由: つなぎ直したときに画面全体を描き直してくれる（dtach などは画面を復元しない）。
+  画面を読んで状態を判定するツール（nagaya）とも組み合わせられる
 
 ## Windows 対応
 

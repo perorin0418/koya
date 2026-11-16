@@ -32,7 +32,8 @@ const usage = `koya - カレントディレクトリをマウントした用途�
 
 使い方:
   koya run [プロファイル] [オプション] [-- コマンド...]   環境に入る / コマンドを実行する
-  koya ls [-a]                   このディレクトリのコンテナ一覧（-a で全ディレクトリ）
+  koya attach [プロファイル] [セッション]   セッションにつなぎ直す
+  koya ls [-a]                   このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
   koya stop [プロファイル]        停止する（省略時はこのディレクトリの全プロファイル）
   koya rm [-f] [プロファイル]     削除する（省略時はこのディレクトリの全プロファイル）
   koya profiles                  使えるプロファイルの一覧
@@ -59,10 +60,14 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
   -e KEY=VAL       環境変数（複数可）
   -p HOST:CTR      ポートを公開する（複数可）
   -v SRC:DST       追加でマウントする（複数可）
-  --rm             使い捨て: 新しいコンテナで実行し、終了したら削除する
   --home           永続ホームを使う（ホストのディレクトリをホームにマウントする）
   --no-home        永続ホームを使わない（設定やプロファイルで有効でも）
   --home-scope S   永続ホームの単位: shared（プロファイルごと）/ project（プロジェクトごと）
+
+そのほかのオプション:
+  --session[=名前] セッションの中で動かす。端末が切れても動き続け、同じコマンドか
+                   koya attach でつなぎ直せる（名前の既定はコマンド名、なければ shell）
+  --rm             使い捨て: 新しいコンテナで実行し、終了したら削除する
 
 コンテナ内では koya を実行したユーザー（同じ名前・UID・ホームのパス）で動きます。
 永続ホームの置き場所などは ~/.config/koya/config で設定します（koya help config）。
@@ -105,6 +110,8 @@ func run(args []string) error {
 	switch cmd {
 	case "run":
 		return cmdRun(rest)
+	case "attach":
+		return cmdAttach(rest)
 	case "ls", "list":
 		return cmdLs(rest)
 	case "stop":
@@ -202,6 +209,8 @@ func cmdRun(args []string) error {
 	fs.BoolVar(&home, "home", false, "")
 	fs.BoolVar(&noHome, "no-home", false, "")
 	fs.StringVar(&homeScope, "home-scope", "", "")
+	var session sessionFlag
+	fs.Var(&session, "session", "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, runUsage)
@@ -218,7 +227,7 @@ func cmdRun(args []string) error {
 	opts.Env, opts.Ports, opts.Volumes = env, ports, vols
 	optsGiven := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name != "rm" {
+		if f.Name != "rm" && f.Name != "session" {
 			optsGiven = true
 		}
 	})
@@ -285,6 +294,15 @@ func cmdRun(args []string) error {
 
 	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user}
 	tty := isTTY(os.Stdin) && isTTY(os.Stdout)
+	if session.enabled {
+		if rm {
+			return errors.New("--session と --rm は同時に指定できません")
+		}
+		if !tty {
+			return errors.New("--session は端末から実行してください（ssh なら -t を付けてください）")
+		}
+		command = container.SessionCommand(container.SessionName(session.name, command), command)
+	}
 	if len(command) == 0 {
 		command = container.DefaultShell
 	}
@@ -457,14 +475,29 @@ func cmdLs(args []string) error {
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	if *all {
-		fmt.Fprintln(tw, "PROFILE\tSTATUS\tWORKDIR\tNAME")
-		for _, i := range infos {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", i.Profile, i.Status, i.Workdir, i.Name)
-		}
+		fmt.Fprintln(tw, "PROFILE\tSTATUS\tSESSIONS\tWORKDIR\tNAME")
 	} else {
-		fmt.Fprintln(tw, "PROFILE\tSTATUS\tNAME")
-		for _, i := range infos {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", i.Profile, i.Status, i.Name)
+		fmt.Fprintln(tw, "PROFILE\tSTATUS\tSESSIONS\tNAME")
+	}
+	for _, i := range infos {
+		sess := "-"
+		if i.Running() {
+			var names []string
+			for _, ss := range container.Sessions(rt, i.Name) {
+				n := ss.Name
+				if ss.Attached {
+					n += "*"
+				}
+				names = append(names, n)
+			}
+			if len(names) > 0 {
+				sess = strings.Join(names, ",")
+			}
+		}
+		if *all {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", i.Profile, i.Status, sess, i.Workdir, i.Name)
+		} else {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", i.Profile, i.Status, sess, i.Name)
 		}
 	}
 	return tw.Flush()
@@ -664,4 +697,77 @@ func windowsUser(username string) container.User {
 		name = name[:32]
 	}
 	return container.User{Name: name, UID: 1000, GID: 1000, Home: "/home/" + name}
+}
+
+// sessionFlag は --session（名前なし）と --session=名前 の両方を受け付けるフラグ。
+type sessionFlag struct {
+	enabled bool
+	name    string
+}
+
+func (f *sessionFlag) String() string   { return f.name }
+func (f *sessionFlag) IsBoolFlag() bool { return true }
+func (f *sessionFlag) Set(v string) error {
+	switch v {
+	case "true":
+		f.enabled, f.name = true, ""
+	case "false":
+		f.enabled, f.name = false, ""
+	default:
+		f.enabled, f.name = true, v
+	}
+	return nil
+}
+
+func cmdAttach(args []string) error {
+	const help = "使い方: koya attach [プロファイル] [セッション]\n\n" +
+		"このディレクトリのコンテナのセッションにつなぎ直します。\n" +
+		"セッションを省略したときは、セッションが1つだけならそれにつなぎます。\n"
+	fs := newFlagSet("attach")
+	pos, err := parseInterspersed(fs, args)
+	if err != nil {
+		return flagErr(err, help)
+	}
+	if len(pos) > 2 {
+		return errors.New(help)
+	}
+	wd, err := workdir()
+	if err != nil {
+		return err
+	}
+	prof := defaultProfile(wd)
+	if len(pos) >= 1 {
+		prof = pos[0]
+	}
+	rt, err := runtime.Detect()
+	if err != nil {
+		return err
+	}
+	name := container.Name(prof, wd)
+	info, exists := container.Inspect(rt, name)
+	if !exists || !info.Running() {
+		return fmt.Errorf("このディレクトリに起動中の %s のコンテナはありません（koya ls で確認できます）", prof)
+	}
+	if !(isTTY(os.Stdin) && isTTY(os.Stdout)) {
+		return errors.New("koya attach は端末から実行してください（ssh なら -t を付けてください）")
+	}
+	sess := ""
+	if len(pos) == 2 {
+		sess = pos[1]
+	} else {
+		ss := container.Sessions(rt, name)
+		switch len(ss) {
+		case 0:
+			return fmt.Errorf("%s のコンテナにセッションはありません", prof)
+		case 1:
+			sess = ss[0].Name
+		default:
+			var names []string
+			for _, x := range ss {
+				names = append(names, x.Name)
+			}
+			return fmt.Errorf("セッションが複数あります。名前を指定してください: %s", strings.Join(names, ", "))
+		}
+	}
+	return rt.Exec(container.ExecArgs(name, wd, true, container.AttachCommand(sess))...)
 }

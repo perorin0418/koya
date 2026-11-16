@@ -42,3 +42,21 @@ func TestHomeOf(t *testing.T) {
 		t.Fatalf("unexpected: %q", k)
 	}
 }
+
+func TestSessionName(t *testing.T) {
+	cases := []struct {
+		given string
+		cmd   []string
+		want  string
+	}{
+		{"", nil, "shell"},
+		{"", []string{"/usr/bin/claude", "--resume"}, "claude"},
+		{"my.work:1", nil, "my-work-1"},
+		{"work", []string{"claude"}, "work"},
+	}
+	for _, c := range cases {
+		if got := SessionName(c.given, c.cmd); got != c.want {
+			t.Errorf("SessionName(%q, %v) = %q, want %q", c.given, c.cmd, got, c.want)
+		}
+	}
+}

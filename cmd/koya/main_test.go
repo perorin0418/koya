@@ -16,3 +16,19 @@ func TestWindowsUser(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionFlag(t *testing.T) {
+	var f sessionFlag
+	f.Set("true")
+	if !f.enabled || f.name != "" {
+		t.Fatalf("--session: %+v", f)
+	}
+	f.Set("work")
+	if !f.enabled || f.name != "work" {
+		t.Fatalf("--session=work: %+v", f)
+	}
+	f.Set("false")
+	if f.enabled {
+		t.Fatalf("--session=false: %+v", f)
+	}
+}
