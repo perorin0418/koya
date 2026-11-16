@@ -35,3 +35,10 @@ func TestParseInfoMissingTrailingField(t *testing.T) {
 		t.Fatalf("unexpected: %+v %v", info, ok)
 	}
 }
+
+func TestHomeOf(t *testing.T) {
+	k := Options{Net: "none", Home: "/data/home/claude"}.Key()
+	if HomeOf(k) != "/data/home/claude" || HomeOf(Options{}.Key()) != "" {
+		t.Fatalf("unexpected: %q", k)
+	}
+}

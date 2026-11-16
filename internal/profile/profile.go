@@ -268,3 +268,16 @@ func (s *Store) build(rt *runtime.Runtime, p *Profile, hash string) error {
 	}
 	return nil
 }
+
+// ImageLabel はビルド済みイメージのラベルの値を返す。なければ空文字。
+func ImageLabel(rt *runtime.Runtime, name, key string) string {
+	out, err := rt.Output("image", "inspect", "--format", `{{index .Config.Labels "`+key+`"}}`, ImageName(name))
+	if err != nil {
+		return ""
+	}
+	v := strings.TrimSpace(out)
+	if v == "<no value>" {
+		return ""
+	}
+	return v
+}

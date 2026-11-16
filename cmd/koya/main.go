@@ -8,12 +8,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/perorin0418/koya"
+	"github.com/perorin0418/koya/internal/config"
 	"github.com/perorin0418/koya/internal/container"
 	"github.com/perorin0418/koya/internal/profile"
 	"github.com/perorin0418/koya/internal/runtime"
@@ -54,6 +59,25 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
   -p HOST:CTR      ポートを公開する（複数可）
   -v SRC:DST       追加でマウントする（複数可）
   --rm             使い捨て: 新しいコンテナで実行し、終了したら削除する
+  --home           永続ホームを使う（ホストのディレクトリをホームにマウントする）
+  --no-home        永続ホームを使わない（設定やプロファイルで有効でも）
+  --home-scope S   永続ホームの単位: shared（プロファイルごと）/ project（プロジェクトごと）
+
+コンテナ内では koya を実行したユーザー（同じ名前・UID・ホームのパス）で動きます。
+永続ホームの置き場所などは ~/.config/koya/config で設定します（koya help config）。
+`
+
+const configUsage = `設定ファイル: ~/.config/koya/config（$XDG_CONFIG_HOME/koya/config）
+
+「キー = 値」の形で書きます。# 以降はコメントです。
+
+  home.dir    = /mnt/pool/koya-home   永続ホームの置き場所（既定: ~/.local/share/koya/home）
+  home.enable = claude, python        既定で永続ホームを使うプロファイル（all で全部）
+  home.scope  = shared                shared: プロファイルごとに1つ（全プロジェクトで共有）
+                                      project: プロジェクトごとに分ける
+
+永続ホームを使うかどうかは、--home / --no-home、home.enable、
+プロファイルの LABEL koya.home="true" の順に決まります。
 `
 
 func main() {
@@ -96,6 +120,8 @@ func run(args []string) error {
 	case "help", "-h", "--help":
 		if len(rest) > 0 && rest[0] == "run" {
 			fmt.Print(runUsage)
+		} else if len(rest) > 0 && rest[0] == "config" {
+			fmt.Print(configUsage)
 		} else {
 			fmt.Print(usage)
 		}
@@ -164,19 +190,29 @@ func cmdRun(args []string) error {
 	fs := newFlagSet("run")
 	var opts container.Options
 	var env, ports, vols multiFlag
-	var rm bool
+	var rm, home, noHome bool
+	var homeScope string
 	fs.StringVar(&opts.Net, "net", "", "")
 	fs.BoolVar(&opts.ReadOnly, "ro", false, "")
 	fs.Var(&env, "e", "")
 	fs.Var(&ports, "p", "")
 	fs.Var(&vols, "v", "")
 	fs.BoolVar(&rm, "rm", false, "")
+	fs.BoolVar(&home, "home", false, "")
+	fs.BoolVar(&noHome, "no-home", false, "")
+	fs.StringVar(&homeScope, "home-scope", "", "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, runUsage)
 	}
 	if len(pos) > 1 {
 		return fmt.Errorf("プロファイルは1つだけ指定できます（コマンドは -- の後ろに書きます）: %s", strings.Join(pos, " "))
+	}
+	if home && noHome {
+		return errors.New("--home と --no-home は同時に指定できません")
+	}
+	if homeScope != "" && homeScope != "shared" && homeScope != "project" {
+		return errors.New("--home-scope は shared か project です")
 	}
 	opts.Env, opts.Ports, opts.Volumes = env, ports, vols
 	optsGiven := false
@@ -199,6 +235,14 @@ func cmdRun(args []string) error {
 	} else {
 		prof = defaultProfile(wd)
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	user, err := hostUser()
+	if err != nil {
+		return err
+	}
 
 	rt, err := runtime.Detect()
 	if err != nil {
@@ -212,25 +256,54 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts}
+
+	// 永続ホーム: --home / --no-home → 設定ファイル → プロファイルの LABEL koya.home の順に決める
+	useHome := cfg.HomeEnabled(prof) || profile.ImageLabel(rt, prof, "koya.home") == "true"
+	if home {
+		useHome = true
+	} else if noHome {
+		useHome = false
+	}
+	if useHome {
+		scope := cfg.HomeScope
+		if homeScope != "" {
+			scope = homeScope
+		}
+		if cfg.HomeDir == "" {
+			return errors.New("永続ホームの置き場所が決められません（設定ファイルに home.dir を書いてください）")
+		}
+		dir := filepath.Join(cfg.HomeDir, prof)
+		if scope == "project" {
+			dir = filepath.Join(cfg.HomeDir, container.Name(prof, wd))
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("永続ホーム %s を作れません: %w", dir, err)
+		}
+		opts.Home = dir
+	}
+
+	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user}
 	tty := isTTY(os.Stdin) && isTTY(os.Stdout)
 	if len(command) == 0 {
 		command = container.DefaultShell
 	}
 
 	if rm {
-		return rt.Exec(container.OneshotArgs(rt, spec, tty, command)...)
+		return runOneshot(rt, spec, tty, command)
 	}
 
 	name := container.Name(prof, wd)
 	info, exists := container.Inspect(rt, name)
 	if !exists {
 		fmt.Fprintf(os.Stderr, "koya: コンテナ %s を作成します\n", name)
-		if err := container.Create(rt, spec); err != nil {
+		if opts.Home != "" {
+			fmt.Fprintf(os.Stderr, "koya: 永続ホーム %s を %s にマウントします\n", opts.Home, user.Home)
+		}
+		if err := container.Create(rt, name, spec); err != nil {
 			return err
 		}
 	} else {
-		if optsGiven && info.Opts != opts.Key() {
+		if (optsGiven && info.Opts != opts.Key()) || container.HomeOf(info.Opts) != opts.Home {
 			created := info.Opts
 			if created == "" {
 				created = "オプションなし"
@@ -248,6 +321,45 @@ func cmdRun(args []string) error {
 		}
 	}
 	return rt.Exec(container.ExecArgs(name, wd, tty, command)...)
+}
+
+// runOneshot は使い捨てのコンテナを作ってコマンドを実行し、終わったら削除する。
+func runOneshot(rt *runtime.Runtime, spec container.Spec, tty bool, command []string) error {
+	name := container.OneshotName(spec.Profile, spec.Workdir)
+	if err := container.Create(rt, name, spec, container.LabelOneshot+"=true"); err != nil {
+		return err
+	}
+	defer func() { _ = rt.Quiet("rm", "-f", name) }()
+	// Ctrl-C はコンテナ内のプロセスに届くので、koya 自身は終了しないようにする
+	signal.Ignore(os.Interrupt)
+	cmd := exec.Command(rt.Bin, container.ExecArgs(name, spec.Workdir, tty, command)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return exitError(ee.ExitCode())
+		}
+		return err
+	}
+	return nil
+}
+
+// hostUser は koya を実行したホストのユーザーを返す。
+func hostUser() (container.User, error) {
+	u, err := user.Current()
+	if err != nil {
+		return container.User{}, fmt.Errorf("ユーザー情報を取得できません: %w", err)
+	}
+	uid, err1 := strconv.Atoi(u.Uid)
+	gid, err2 := strconv.Atoi(u.Gid)
+	if err1 != nil || err2 != nil {
+		return container.User{}, fmt.Errorf("UID/GID が数値ではありません: %s/%s", u.Uid, u.Gid)
+	}
+	home := u.HomeDir
+	if home == "" || home == "/" {
+		home = "/home/" + u.Username
+	}
+	return container.User{Name: u.Username, UID: uid, GID: gid, Home: home}, nil
 }
 
 // workdir はカレントディレクトリの絶対パスを返す。

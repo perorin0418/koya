@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/perorin0418/koya/internal/profile"
@@ -21,6 +22,7 @@ const (
 	LabelWorkdir = "koya.workdir"
 	LabelHash    = "koya.hash"
 	LabelOpts    = "koya.opts"
+	LabelOneshot = "koya.oneshot"
 )
 
 // DefaultShell はシェルを起動するコマンド。標準入力が端末なら対話シェル、
@@ -37,6 +39,7 @@ type Options struct {
 	Env      []string
 	Ports    []string
 	Volumes  []string
+	Home     string // 永続ホームとしてマウントするホストのディレクトリ（空なら使わない）
 }
 
 // Key は設定を比較用の文字列にする（ラベル koya.opts に入れる）。
@@ -58,6 +61,9 @@ func (o Options) Key() string {
 	add("e", o.Env)
 	add("p", o.Ports)
 	add("v", o.Volumes)
+	if o.Home != "" {
+		parts = append(parts, "home="+o.Home)
+	}
 	return strings.Join(parts, ";")
 }
 
@@ -171,12 +177,31 @@ func List(rt *runtime.Runtime, workdir, prof string) ([]Info, error) {
 	return infos, nil
 }
 
+// HomeOf は Key() の文字列から永続ホームの設定を取り出す。
+func HomeOf(key string) string {
+	for _, p := range strings.Split(key, ";") {
+		if strings.HasPrefix(p, "home=") {
+			return strings.TrimPrefix(p, "home=")
+		}
+	}
+	return ""
+}
+
+// User はコンテナ内で使うユーザー（koya を実行したホストのユーザー）。
+type User struct {
+	Name string
+	UID  int
+	GID  int
+	Home string // コンテナ内のホームディレクトリ（ホストと同じパス）
+}
+
 // Spec はコンテナ作成に必要な情報。
 type Spec struct {
 	Profile string
 	Workdir string
 	Hash    string
 	Opts    Options
+	User    User
 }
 
 // RunArgs は run コマンドの共通引数（イメージ名の手前まで）を返す。
@@ -193,10 +218,16 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 		"--label", LabelOpts + "=" + s.Opts.Key(),
 		"--hostname", "koya-" + s.Profile,
 		"-e", "KOYA_PROFILE=" + s.Profile,
-		"-v", mount,
-		"-w", s.Workdir,
+		"-e", "HOME=" + s.User.Home,
+		"-e", "USER=" + s.User.Name,
+		"-e", "LOGNAME=" + s.User.Name,
 	}
-	args = append(args, userArgs(rt)...)
+	// ホームを先にマウントし、作業ディレクトリがホームの下にあっても上から重ねられるようにする
+	if s.Opts.Home != "" {
+		args = append(args, "-v", s.Opts.Home+":"+s.User.Home+":z")
+	}
+	args = append(args, "-v", mount, "-w", s.Workdir)
+	args = append(args, userArgs(rt, s.User)...)
 	if s.Opts.Net != "" {
 		args = append(args, "--network", s.Opts.Net)
 	}
@@ -212,26 +243,89 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 	return args
 }
 
+// runsAsRoot は、ファイルの所有者をホストのユーザーに揃えるために
+// コンテナ内で UID 0 として動かす必要があるかを返す。
+// rootless のランタイムを docker CLI から使う場合、コンテナ内の root がホストのユーザーに対応する
+// （docker CLI は --userns=keep-id を受け付けないため）。
+func runsAsRoot(rt *runtime.Runtime, u User) bool {
+	return u.UID == 0 || (rt.Rootless && rt.Kind != "podman")
+}
+
 // userArgs はマウントしたファイルの所有者をホストのユーザーのままにするための引数。
-func userArgs(rt *runtime.Runtime) []string {
+func userArgs(rt *runtime.Runtime, u User) []string {
 	switch {
-	case rt.Kind == "podman" && rt.Rootless:
-		// ホストのユーザーをコンテナ内の dev (1000) に対応づける
-		return []string{"--userns=keep-id:uid=1000,gid=1000", "--user", "1000:1000"}
-	case rt.Rootless:
-		// rootless では、コンテナ内の root がホストのユーザーに対応する
+	case runsAsRoot(rt, u):
 		return []string{"--user", "0:0"}
+	case rt.Kind == "podman" && rt.Rootless:
+		// ホストの UID/GID をコンテナ内でも同じ UID/GID に対応づける
+		return []string{"--userns=keep-id", "--user", fmt.Sprintf("%d:%d", u.UID, u.GID)}
 	default:
-		return []string{"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "-e", "HOME=/home/dev"}
+		return []string{"--user", fmt.Sprintf("%d:%d", u.UID, u.GID)}
 	}
 }
 
-// Create は常駐用のコンテナを作って起動する。
-func Create(rt *runtime.Runtime, s Spec) error {
-	args := []string{"run", "-d", "--init", "--name", Name(s.Profile, s.Workdir), "--entrypoint", "sleep"}
+// setupScript はコンテナ内にホストのユーザーを登録する（root で実行する）。
+// 引数: 名前 UID GID ホーム
+// UID 0 で動かす場合は、同じ UID 0 の行を root より前に入れて、名前の解決でこのユーザーが返るようにする。
+const setupScript = `
+name=$1; uid=$2; gid=$3; home=$4
+shell=/bin/sh
+[ -x /bin/bash ] && shell=/bin/bash
+line="$name:x:$uid:$gid:$name:$home:$shell"
+tmp=$(mktemp)
+{
+  if [ "$uid" = 0 ]; then echo "$line"; fi
+  while IFS= read -r l; do
+    n=${l%%:*}; r=${l#*:}; r=${r#*:}; u=${r%%:*}
+    if [ "$n" = "$name" ]; then continue; fi
+    if [ "$u" = "$uid" ] && [ "$n" != root ]; then continue; fi
+    echo "$l"
+  done < /etc/passwd
+  if [ "$uid" != 0 ]; then echo "$line"; fi
+} > "$tmp"
+cat "$tmp" > /etc/passwd
+rm -f "$tmp"
+if ! cut -d: -f3 /etc/group | grep -qx "$gid"; then echo "$name:x:$gid:" >> /etc/group; fi
+if [ -f /etc/shadow ] && ! cut -d: -f1 /etc/shadow | grep -qx "$name"; then echo "$name:*:19000:0:99999:7:::" >> /etc/shadow; fi
+if [ "$uid" != 0 ] && [ -d /etc/sudoers.d ]; then
+  echo "$name ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/koya-user
+  chmod 0440 /etc/sudoers.d/koya-user
+fi
+mkdir -p "$home"
+chown "$uid:$gid" "$home" 2>/dev/null || true
+`
+
+// Setup はコンテナ内にホストのユーザーを登録する。
+// コンテナ内で UID 0 として動かす場合は、UID/GID 0 でホストのユーザー名を登録する。
+func Setup(rt *runtime.Runtime, name string, u User) error {
+	uid, gid := u.UID, u.GID
+	if runsAsRoot(rt, u) {
+		uid, gid = 0, 0
+	}
+	err := rt.Quiet("exec", "-u", "0", name, "sh", "-c", setupScript, "koya-setup",
+		u.Name, strconv.Itoa(uid), strconv.Itoa(gid), u.Home)
+	if err != nil {
+		return fmt.Errorf("コンテナ内のユーザーの設定に失敗しました: %w", err)
+	}
+	return nil
+}
+
+// Create は常駐用のコンテナを作って起動し、ユーザーを登録する。
+func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
+	args := []string{"run", "-d", "--init", "--name", name, "--entrypoint", "sleep"}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
 	args = append(args, RunArgs(rt, s)...)
 	args = append(args, profile.ImageName(s.Profile), "infinity")
-	return rt.Quiet(args...)
+	if err := rt.Quiet(args...); err != nil {
+		return err
+	}
+	if err := Setup(rt, name, s.User); err != nil {
+		_ = rt.Quiet("rm", "-f", name)
+		return err
+	}
+	return nil
 }
 
 // ExecArgs は exec コマンドの引数を返す。
@@ -247,17 +341,7 @@ func ExecArgs(name, workdir string, tty bool, cmd []string) []string {
 	return append(args, cmd...)
 }
 
-// OneshotArgs は --rm 用の run コマンドの引数を返す（終了時にコンテナを消す）。
-func OneshotArgs(rt *runtime.Runtime, s Spec, tty bool, cmd []string) []string {
-	args := []string{"run", "--rm", "-i", "--init"}
-	if tty {
-		args = append(args, "-t")
-		if term := os.Getenv("TERM"); term != "" {
-			args = append(args, "-e", "TERM="+term)
-		}
-	}
-	args = append(args, "--entrypoint", cmd[0])
-	args = append(args, RunArgs(rt, s)...)
-	args = append(args, profile.ImageName(s.Profile))
-	return append(args, cmd[1:]...)
+// OneshotName は使い捨てコンテナの名前を返す。
+func OneshotName(prof, workdir string) string {
+	return fmt.Sprintf("%s-tmp%d", Name(prof, workdir), os.Getpid())
 }

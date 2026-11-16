@@ -47,15 +47,52 @@ koya-<プロファイル>-<ディレクトリ名>-<絶対パスの SHA-256 先�
 
 ## ユーザーと権限
 
-マウントしたファイルの所有者がホストのユーザーのままになるようにする。
+コンテナ内では **koya を実行したホストのユーザー**（同じユーザー名・ホームのパス）として動く。
+マウントしたファイルの所有者もホストのユーザーのままになるようにする。
 
-- 各イメージには UID/GID 1000 の一般ユーザー `dev` を作り、パスワードなし sudo を許可する。
-- podman CLI（rootless）: `--userns=keep-id:uid=1000,gid=1000` でホストのユーザーをコンテナ内の `dev` に対応づける。
-- docker CLI で rootless のランタイム（rootless docker、または docker CLI からつないだ rootless podman）: `--user 0:0` で起動する。
-  rootless ではコンテナ内の root がホストのユーザーに対応するため、作ったファイルはホストのユーザーの所有になる。
-  （docker CLI は `--userns=keep-id` を受け付けない）
-- docker（rootful）: `--user <ホストのUID>:<GID>` で起動する。ホストの UID が 1000 でない場合に備え、
-  `HOME=/home/dev` を書き込み可能にしておく。
+- イメージには一般ユーザーを作らない。コンテナを作った直後に、koya が root で `exec` して
+  `/etc/passwd`・`/etc/group`・`/etc/shadow` にホストのユーザーを登録し、ホームディレクトリを作る。
+  `/etc/sudoers.d` があればパスワードなし sudo も許可する（UID 0 で動く場合は不要）。
+- 環境変数 `HOME`・`USER`・`LOGNAME` もホストのユーザーに合わせる。ホームのパスはホストと同じ（例: `/home/perorin`）。
+- ランタイムごとの UID の対応:
+
+| ランタイム | 起動の引数 | コンテナ内の UID |
+|---|---|---|
+| podman CLI（rootless） | `--userns=keep-id --user <UID>:<GID>` | ホストと同じ UID |
+| docker CLI で rootless のランタイム（rootless docker、docker CLI からつないだ rootless podman） | `--user 0:0` | 0 |
+| rootful docker / podman | `--user <UID>:<GID>` | ホストと同じ UID |
+
+- docker CLI は `--userns=keep-id` を受け付けないため、rootless のランタイムを docker CLI から使う場合は
+  UID 0 で動かす（rootless ではコンテナ内の root がホストのユーザーに対応するため、作ったファイルはホストのユーザーの所有になる）。
+  このときは、ホストのユーザー名の UID 0 の行を `/etc/passwd` の root より前に入れ、`whoami` などでホストのユーザー名が出るようにする。
+
+## 永続ホーム
+
+設定で有効にしたときだけ、ホストのディレクトリをコンテナ内のホームにマウントする。
+`~/.claude`・`~/.claude.json`・シェル履歴・`.gitconfig`・各種キャッシュなどが、コンテナを作り直しても残る。
+
+- 有効にするかどうかは、次の順に決める。
+  1. `koya run --home` / `--no-home`
+  2. 設定ファイルの `home.enable`（プロファイル名の並び、または `all`）
+  3. プロファイルの `LABEL koya.home="true"`（claude プロファイルはこれで既定で有効）
+- ホスト上の置き場所は `<home.dir>/<プロファイル名>/`（`home.scope = shared`、既定）。
+  同じプロファイルなら全プロジェクトで同じホームを共有する（Claude Code へのログインが1回で済む）。
+  `home.scope = project`（または `--home-scope project`）ならコンテナ名ごとに分ける。
+- `home.dir` の既定は `~/.local/share/koya/home`。ランタイムがリモート（ホストの Podman など）の場合は、
+  ホストから同じパスで見える場所を指定する必要がある。
+- ホームのマウントはコンテナ作成時にだけ効く。設定を変えたら `koya rm -f` で作り直す（違う場合は警告を出す）。
+- イメージの `$HOME` の下はマウントで隠れるため、プロファイルの Dockerfile ではホームの下に何も入れない
+  （同梱プロファイルは `/usr/local` や `/go` に入れている）。
+
+### 設定ファイル
+
+`~/.config/koya/config`（`$XDG_CONFIG_HOME/koya/config`）。外部ライブラリなしで読めるよう「キー = 値」の形にする。
+
+```ini
+home.dir    = /mnt/pool/koya-home   # 永続ホームの置き場所
+home.enable = claude, python        # 既定で永続ホームを使うプロファイル（all で全部）
+home.scope  = shared                # shared / project
+```
 
 ## プロファイル（同梱イメージ）
 
@@ -67,6 +104,7 @@ koya-<プロファイル>-<ディレクトリ名>-<絶対パスの SHA-256 先�
 | `python` | base | python3, pip, venv, uv, gcc（C 拡張のビルド用） |
 | `node` | base | Node.js LTS, npm |
 | `go` | base | Go 最新安定版, gcc（cgo 用） |
+| `claude` | node | Claude Code。永続ホームが既定で有効。自動アップデートは切り、`koya build claude` で更新する |
 
 - プロファイルは `profiles/<名前>/Dockerfile` に置き、`go:embed` でバイナリに埋め込む。
 - `base` 以外は `FROM localhost/koya/base` で base を引き継ぐ。依存するイメージは自動で先にビルドする。
@@ -89,6 +127,8 @@ koya-<プロファイル>-<ディレクトリ名>-<絶対パスの SHA-256 先�
 | `-e KEY=VAL` | 環境変数を渡す |
 | `-p 8080:8080` | ポートを公開する |
 | `-v src:dst` | 追加のマウント |
+| `--home` / `--no-home` | 永続ホームを使う / 使わない |
+| `--home-scope shared\|project` | 永続ホームの単位 |
 
 これらはコンテナ作成時にだけ効く。既存のコンテナと違うオプションを指定した場合は、
 警告を出して `koya rm` で作り直すよう促す（作成時の設定はラベル `koya.opts` に記録して比較する）。
@@ -121,8 +161,11 @@ koya run python
   4. コンテナ名を決める（koya-python-myapp-3fa2b91c）
   5. コンテナがなければ作成する: run -d --init --name ... -v $PWD:$PWD:z -w $PWD --entrypoint sleep <イメージ> infinity
      停止中なら start する
-  6. exec -it -w $PWD <コンテナ> <コマンド or シェル> で中に入る
+  6. root で exec して、ホストのユーザーをコンテナ内に登録する（作成したときだけ）
+  7. exec -it -w $PWD <コンテナ> <コマンド or シェル> で中に入る
      （標準入力が端末なら対話シェル、パイプならスクリプトとして読む）
+
+`--rm` のときも同じ手順でコンテナを作り、コマンドが終わったら削除する。
 ```
 
 コンテナは `sleep infinity` で常駐させ、操作はすべて `exec` で行う。複数の端末から同じ環境に入れる。
@@ -134,13 +177,15 @@ koya run python
 koya/
 ├── cmd/koya/main.go        エントリポイント、コマンドの振り分け
 ├── internal/runtime/       podman/docker の検出と呼び出し
+├── internal/config/        設定ファイルの読み込み
 ├── internal/profile/       プロファイルの解決、埋め込み、ビルド
 ├── internal/container/     名前付け、作成、exec、ls/stop/rm
 ├── profiles/               同梱プロファイル（go:embed 対象）
 │   ├── base/Dockerfile, bashrc
 │   ├── python/Dockerfile
 │   ├── node/Dockerfile
-│   └── go/Dockerfile
+│   ├── go/Dockerfile
+│   └── claude/Dockerfile
 └── docs/design.md
 ```
 
@@ -151,5 +196,4 @@ koya/
 
 - GPU やデバイスの受け渡し
 - devcontainer.json の読み込み
-- コンテナ内での Claude Code など AI エージェント用プロファイル（候補として有力）
 - リソース制限（`--memory`, `--cpus`）

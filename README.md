@@ -6,7 +6,7 @@
 ```console
 $ cd ~/src/myapp
 $ koya run python             # python 用の隔離環境に入る（なければ作る）
-(koya:python) /home/me/src/myapp $ exit
+(koya:python) me ~/src/myapp $ exit
 $ koya run node -- npm test   # node 用の環境でコマンドを1つ実行する
 $ koya ls
 PROFILE  STATUS   NAME
@@ -38,7 +38,7 @@ koya help [コマンド]
 - コンテナは「ディレクトリ × プロファイル」ごとに1つ作られ、`koya rm` するまで残ります。
   2回目以降は同じコンテナに入るので、入れたパッケージなどもそのまま残ります。
 - マウントするのはカレントディレクトリだけです（コンテナ内でも同じパス）。ホームや SSH 鍵は渡しません。
-- 作ったファイルの所有者はホストのユーザーのままになります。
+- コンテナ内では koya を実行したユーザー（同じユーザー名・ホームのパス）で動きます。作ったファイルの所有者もホストのユーザーのままです。sudo も使えます。
 - イメージは初めて使うときに自動でビルドします。同梱の Dockerfile が更新されたら自動でビルドし直します。
 
 ### `koya run` のオプション
@@ -53,6 +53,8 @@ koya help [コマンド]
 | `-p 8080:8080` | ポートを公開する（複数可） |
 | `-v SRC:DST` | 追加でマウントする（複数可） |
 | `--rm` | 使い捨て: 新しいコンテナで実行し、終了したら削除する |
+| `--home` / `--no-home` | 永続ホームを使う / 使わない（下記） |
+| `--home-scope shared\|project` | 永続ホームをプロファイルごとに共有するか、プロジェクトごとに分けるか |
 
 ### 既定のプロファイル
 
@@ -70,6 +72,42 @@ koya help [コマンド]
 | `python` | base + python3, pip, venv, uv, gcc |
 | `node` | base + Node.js LTS, npm, corepack |
 | `go` | base + Go 最新安定版, gcc |
+| `claude` | node + Claude Code（永続ホームが既定で有効） |
+
+## 永続ホーム
+
+有効にすると、ホストのディレクトリをコンテナ内のホームにマウントします。
+`~/.claude`、`~/.claude.json`、シェル履歴、`.gitconfig`、各種キャッシュなどが、コンテナを作り直しても残ります。
+ホストのホームとは別のディレクトリなので、隔離は保たれます。
+
+```bash
+koya run python --home     # その場で有効にする
+koya run claude            # claude プロファイルは既定で有効
+koya run claude --no-home  # 無効にする
+```
+
+置き場所は `<home.dir>/<プロファイル名>/` で、同じプロファイルなら全プロジェクトで共有します
+（Claude Code へのログインは1回で済みます）。設定は `~/.config/koya/config` に書きます。
+
+```ini
+home.dir    = /mnt/pool/koya-home   # 置き場所（既定: ~/.local/share/koya/home）
+home.enable = python                # 既定で有効にするプロファイル（all で全部）
+home.scope  = shared                # shared: プロファイルごと / project: プロジェクトごと
+```
+
+ランタイムが別のマシンやホストで動いている場合（リモートの Podman など）は、`home.dir` に
+ランタイム側から同じパスで見えるディレクトリを指定してください。
+
+### Claude Code
+
+```bash
+cd ~/src/myapp
+koya run claude -- claude                                  # 初回はログインする
+koya run claude -- claude --dangerously-skip-permissions   # 隔離環境なので確認なしで動かす
+```
+
+カレントディレクトリしか見えないので、ホストの他のファイルや SSH 鍵には触れません。
+Claude Code の更新は `koya build claude` でイメージを作り直してから、`koya rm -f claude` で作り直します。
 
 ### 自分でプロファイルを追加する
 
@@ -85,6 +123,9 @@ RUN dnf install -y postgresql sqlite \
 
 `FROM localhost/koya/<名前>` と書くと、そのプロファイルを先にビルドしてから引き継ぎます。
 
+- `$HOME` の下には何も入れないでください（ユーザーは koya が作成時に登録し、永続ホームでも隠れるため）。
+- `LABEL koya.home="true"` を付けると、そのプロファイルでは永続ホームが既定で有効になります。
+
 ## 環境変数
 
 | 名前 | 意味 |
@@ -92,4 +133,4 @@ RUN dnf install -y postgresql sqlite \
 | `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` など）。既定は podman → docker の順に自動検出 |
 | `KOYA_PROFILE` | 既定のプロファイル |
 
-設計の詳細は [docs/design.md](docs/design.md) を参照。
+`koya help config` で設定ファイルの書き方を表示します。設計の詳細は [docs/design.md](docs/design.md) を参照。

@@ -1,16 +1,12 @@
-# koya base: Fedora 最新版 + 共通ツールと一般ユーザー dev（UID/GID 1000、パスワードなし sudo）
+# koya base: Fedora 最新版 + 共通ツール
+# コンテナ内のユーザーは、koya がコンテナ作成時に「koya を実行したホストのユーザー」として登録する。
+# そのため、イメージには一般ユーザーを作らず、$HOME の下にも何も置かない（永続ホームで隠れるため）。
 FROM registry.fedoraproject.org/fedora:latest
 
 RUN dnf install -y --setopt=install_weak_deps=False \
       ca-certificates curl wget git openssh-clients sudo less vim-minimal jq \
       procps-ng unzip xz bash-completion make findutils which hostname \
  && dnf clean all
-
-RUN groupadd -g 1000 dev \
- && useradd -m -u 1000 -g 1000 -s /bin/bash dev \
- && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
- && chmod 0440 /etc/sudoers.d/dev \
- && chmod 0777 /home/dev
 
 COPY bashrc /etc/koya/bashrc
 
