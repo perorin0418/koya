@@ -1,0 +1,4 @@
+# koya が対話シェルを起動するときに読み込む rc ファイル
+[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+[ -f /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
+PS1='\[\e[1;35m\](koya:${KOYA_PROFILE:-?})\[\e[0m\] \[\e[1;34m\]\w\[\e[0m\] \$ '
