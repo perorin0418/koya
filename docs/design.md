@@ -75,10 +75,10 @@ koya-<プロファイル>-<ディレクトリ名>-<絶対パスの SHA-256 先�
   1. `koya run --home` / `--no-home`
   2. 設定ファイルの `home.enable`（プロファイル名の並び、または `all`）
   3. プロファイルの `LABEL koya.home="true"`（claude プロファイルはこれで既定で有効）
-- ホスト上の置き場所は `<home.dir>/<プロファイル名>/`（`home.scope = shared`、既定）。
+- ホスト上の置き場所は `<home.linux.dir>/<プロファイル名>/`（`home.scope = shared`、既定）。
   同じプロファイルなら全プロジェクトで同じホームを共有する（Claude Code へのログインが1回で済む）。
   `home.scope = project`（または `--home-scope project`）ならコンテナ名ごとに分ける。
-- `home.dir` の既定は `~/.local/share/koya/home`。ランタイムがリモート（ホストの Podman など）の場合は、
+- `home.linux.dir` の既定は `~/.local/share/koya/home`。ランタイムがリモート（ホストの Podman など）の場合は、
   ホストから同じパスで見える場所を指定する必要がある。
 - ホームのマウントはコンテナ作成時にだけ効く。設定を変えたら `koya rm -f` で作り直す（違う場合は警告を出す）。
 - イメージの `$HOME` の下はマウントで隠れるため、プロファイルの Dockerfile ではホームの下に何も入れない
@@ -89,10 +89,14 @@ koya-<プロファイル>-<ディレクトリ名>-<絶対パスの SHA-256 先�
 `~/.config/koya/config`（`$XDG_CONFIG_HOME/koya/config`）。外部ライブラリなしで読めるよう「キー = 値」の形にする。
 
 ```ini
-home.dir    = /mnt/pool/koya-home   # 永続ホームの置き場所
+home.linux.dir = /mnt/pool/koya-home   # 永続ホームの置き場所（Linux コンテナ用）
+home.win.dir   = C:\koya\home-win      # 永続ホームの置き場所（Windows コンテナ用。既定は <home.linux.dir>-win）
 home.enable = claude, python        # 既定で永続ホームを使うプロファイル（all で全部）
 home.scope  = shared                # shared / project
 ```
+
+- 置き場所のキーは Linux 用と Windows 用で対にする（`home.linux.dir` / `home.win.dir`）。
+  旧名の `home.dir` は `home.linux.dir` と同じ意味で読む（既存の設定ファイルを壊さないため）。両方書いたらエラーにする。
 
 ## プロファイル（同梱イメージ）
 
@@ -273,7 +277,7 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 - コンテナ作成時に ContainerAdministrator の `User Shell Folders`（AppData・Local AppData・Personal）も向ける
   （`SHGetKnownFolderPath` でたずねるツール向け）。`reg.exe` に引数を直接渡す（`cmd /c` だと引用符が崩れる）
 - 残らないもの: API でホームそのもの（FOLDERID_Profile）をたずねるツールの書き込み、レジストリ（HKCU）の設定
-- 置き場所は `<home.dir>-win`（既定 `%LOCALAPPDATA%\koya\home-win`）。Linux 用と中身が違うため分ける。
+- 置き場所は `home.win.dir`（既定 `<home.linux.dir>-win`、つまり `%LOCALAPPDATA%\koya\home-win`）。Linux 用と中身が違うため分ける。
   マウント元がないと Windows コンテナは起動しないため、`AppData\Roaming`・`AppData\Local`・`Documents` を先に作る
 - 永続ホームを先にマウントし、その下の作業ディレクトリを重ねる（入れ子のマウントが動くことを確認済み）
 - 入れ子のマウントでは、途中のディレクトリ（`C:\Users\<名前>\src` など）が作られず、lstat すると「存在しない」になる
@@ -320,6 +324,7 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 | 既定のプロファイル | `.koya` → `KOYA_PROFILE` → base | `KOYA_WIN_PROFILE` → base |
 
 - `ls`・`stop`・`rm`・`profiles`・`build` も `--win` で Windows コンテナ側を扱う。
+- 対象は `--linux` / `--win` の対で選ぶ。何も付けなければ `--linux`（省略できる既定）。両方付けたらエラーにする。
 - WSL の中の Linux 版 koya からは使えない（名前付きパイプとサービスの操作が Windows のものなため）。
 
 ### 動作確認と今後

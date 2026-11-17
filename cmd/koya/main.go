@@ -48,8 +48,8 @@ const usage = `koya - カレントディレクトリをマウントした用途�
 プロファイルを省略したときは、上の階層へたどって見つかる .koya ファイル、
 環境変数 KOYA_PROFILE、base の順に決めます。
 
-run・ls・stop・rm・profiles・build に --win を付けると、Linux コンテナの代わりに
-Windows コンテナを扱います（Windows のみ。koya help win）。
+run・ls・stop・rm・profiles・build は、--linux（Linux コンテナ。省略時の既定）か
+--win（Windows コンテナ。Windows のみ。koya help win）で対象を選びます。
 
 環境変数:
   KOYA_RUNTIME   使うランタイム（podman / docker）。既定は podman → docker の順に自動検出
@@ -75,6 +75,7 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
   --session[=名前] セッションの中で動かす。端末が切れても動き続け、同じコマンドか
                    koya attach でつなぎ直せる（名前の既定はコマンド名、なければ shell）
   --rm             使い捨て: 新しいコンテナで実行し、終了したら削除する
+  --linux          Linux コンテナで動かす（既定）
   --win            Windows コンテナで動かす（Windows のみ。koya help win）
 
 コンテナ内では koya を実行したユーザー（同じ名前・UID・ホームのパス）で動きます。
@@ -85,7 +86,10 @@ const configUsage = `設定ファイル: ~/.config/koya/config（$XDG_CONFIG_HOM
 
 「キー = 値」の形で書きます。# 以降はコメントです。
 
-  home.dir    = /mnt/pool/koya-home   永続ホームの置き場所（既定: ~/.local/share/koya/home）
+  home.linux.dir = /mnt/pool/koya-home   永続ホームの置き場所（既定: ~/.local/share/koya/home）
+                                       旧名の home.dir も同じ意味で読みます
+  home.win.dir   = C:\koya\home-win      --win（Windows コンテナ）の永続ホームの置き場所
+                                       （既定: <home.linux.dir>-win）
   home.enable = claude, python        既定で永続ホームを使うプロファイル（all で全部）
   home.scope  = shared                shared: プロファイルごとに1つ（全プロジェクトで共有）
                                       project: プロジェクトごとに分ける
@@ -111,8 +115,8 @@ Windows 版の koya でだけ使えます（WSL の中の koya からは使え�
   - カレントディレクトリは、C: ならそのままのパス、ほかのドライブなら C:\mnt\<ドライブ>\... にマウントします。
   - --session・attach は使えません。ユーザーは ContainerAdministrator です。
   - 永続ホーム（--home）は C:\Users\<ホストのユーザー名> にマウントし、USERPROFILE・HOME・APPDATA・
-    LOCALAPPDATA とユーザーのフォルダの設定をそこに向けます。置き場所は <home.dir>-win
-    （既定 %LOCALAPPDATA%\koya\home-win）。Windows の API でホームそのものをたずねるツールや、
+    LOCALAPPDATA とユーザーのフォルダの設定をそこに向けます。置き場所は設定の home.win.dir
+    （既定 <home.linux.dir>-win、つまり %LOCALAPPDATA%\koya\home-win）。Windows の API でホームそのものをたずねるツールや、
     レジストリ（HKCU）に書かれる設定は残りません。
   - プロファイルを省略したときは、環境変数 KOYA_WIN_PROFILE、なければ base です（.koya は見ません）。
 
@@ -245,7 +249,7 @@ func cmdRun(args []string) error {
 	fs := newFlagSet("run")
 	var opts container.Options
 	var env, ports, vols multiFlag
-	var rm, home, noHome, win bool
+	var rm, home, noHome, win, linux bool
 	var homeScope string
 	fs.StringVar(&opts.Net, "net", "", "")
 	fs.BoolVar(&opts.ReadOnly, "ro", false, "")
@@ -257,6 +261,7 @@ func cmdRun(args []string) error {
 	fs.BoolVar(&noHome, "no-home", false, "")
 	fs.StringVar(&homeScope, "home-scope", "", "")
 	fs.BoolVar(&win, "win", false, "")
+	fs.BoolVar(&linux, "linux", false, "")
 	var session sessionFlag
 	fs.Var(&session, "session", "")
 	pos, err := parseInterspersed(fs, args)
@@ -275,7 +280,7 @@ func cmdRun(args []string) error {
 	opts.Env, opts.Ports, opts.Volumes = env, ports, vols
 	optsGiven := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name != "rm" && f.Name != "session" && f.Name != "win" {
+		if f.Name != "rm" && f.Name != "session" && f.Name != "win" && f.Name != "linux" {
 			optsGiven = true
 		}
 	})
@@ -285,6 +290,9 @@ func cmdRun(args []string) error {
 		return err
 	}
 	if err := checkWorkdir(wd); err != nil {
+		return err
+	}
+	if err := checkTarget(win, linux); err != nil {
 		return err
 	}
 	if win {
@@ -349,13 +357,13 @@ func cmdRun(args []string) error {
 		if homeScope != "" {
 			scope = homeScope
 		}
-		if cfg.HomeDir == "" {
-			return errors.New("永続ホームの置き場所が決められません（設定ファイルに home.dir を書いてください）")
-		}
-		// Windows コンテナの永続ホームは Linux 用と中身が違うため、<home.dir>-win に分ける
-		root := cfg.HomeDir
-		if win {
-			root = filepath.Clean(root) + "-win"
+		root := cfg.HomeRoot(win)
+		if root == "" {
+			key := "home.linux.dir"
+			if win {
+				key = "home.win.dir"
+			}
+			return fmt.Errorf("永続ホームの置き場所が決められません（設定ファイルに %s を書いてください）", key)
 		}
 		dir := filepath.Join(root, prof)
 		if scope == "project" {
@@ -543,12 +551,16 @@ func isTTY(f *os.File) bool {
 }
 
 func cmdLs(args []string) error {
-	const help = "使い方: koya ls [-a] [--win]\n\n  -a      全ディレクトリのコンテナを表示する\n  --win   Windows コンテナを表示する\n"
+	const help = "使い方: koya ls [-a] [--linux | --win]\n\n  -a        全ディレクトリのコンテナを表示する\n  --linux   Linux コンテナを表示する（既定）\n  --win     Windows コンテナを表示する\n"
 	fs := newFlagSet("ls")
 	all := fs.Bool("a", false, "")
 	win := fs.Bool("win", false, "")
+	linux := fs.Bool("linux", false, "")
 	if _, err := parseInterspersed(fs, args); err != nil {
 		return flagErr(err, help)
+	}
+	if err := checkTarget(*win, *linux); err != nil {
+		return err
 	}
 	rt, err := detect(*win)
 	if err != nil {
@@ -635,12 +647,16 @@ func targets(rt *runtime.Runtime, profs []string) ([]container.Info, error) {
 }
 
 func cmdStop(args []string) error {
-	const help = "使い方: koya stop [--win] [プロファイル...]\n"
+	const help = "使い方: koya stop [--linux | --win] [プロファイル...]\n"
 	fs := newFlagSet("stop")
 	win := fs.Bool("win", false, "")
+	linux := fs.Bool("linux", false, "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, help)
+	}
+	if err := checkTarget(*win, *linux); err != nil {
+		return err
 	}
 	rt, err := detect(*win)
 	if err != nil {
@@ -663,13 +679,17 @@ func cmdStop(args []string) error {
 }
 
 func cmdRm(args []string) error {
-	const help = "使い方: koya rm [-f] [--win] [プロファイル...]\n\n  -f      起動中でも削除する\n  --win   Windows コンテナを対象にする\n"
+	const help = "使い方: koya rm [-f] [--linux | --win] [プロファイル...]\n\n  -f        起動中でも削除する\n  --linux   Linux コンテナを対象にする（既定）\n  --win     Windows コンテナを対象にする\n"
 	fs := newFlagSet("rm")
 	force := fs.Bool("f", false, "")
 	win := fs.Bool("win", false, "")
+	linux := fs.Bool("linux", false, "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, help)
+	}
+	if err := checkTarget(*win, *linux); err != nil {
+		return err
 	}
 	rt, err := detect(*win)
 	if err != nil {
@@ -700,12 +720,16 @@ func cmdRm(args []string) error {
 }
 
 func cmdProfiles(args []string) error {
-	const help = "使い方: koya profiles [--win]\n"
+	const help = "使い方: koya profiles [--linux | --win]\n"
 	fs := newFlagSet("profiles")
 	win := fs.Bool("win", false, "")
+	linux := fs.Bool("linux", false, "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, help)
+	}
+	if err := checkTarget(*win, *linux); err != nil {
+		return err
 	}
 	if len(pos) > 0 {
 		return errors.New(help)
@@ -762,12 +786,16 @@ func cmdProfiles(args []string) error {
 }
 
 func cmdBuild(args []string) error {
-	const help = "使い方: koya build [--win] [プロファイル...]\n"
+	const help = "使い方: koya build [--linux | --win] [プロファイル...]\n"
 	fs := newFlagSet("build")
 	win := fs.Bool("win", false, "")
+	linux := fs.Bool("linux", false, "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, help)
+	}
+	if err := checkTarget(*win, *linux); err != nil {
+		return err
 	}
 	var rt *runtime.Runtime
 	var store *profile.Store
@@ -1035,4 +1063,13 @@ func cmdWin(args []string) (err error) {
 		err = fmt.Errorf("koya win %s というコマンドはありません（koya help win）", sub)
 	}
 	return err
+}
+
+// checkTarget は --win と --linux が同時に指定されていないかを確かめる。
+// どちらもなければ --linux（Linux コンテナ）として扱う。
+func checkTarget(win, linux bool) error {
+	if win && linux {
+		return errors.New("--win と --linux は同時に指定できません")
+	}
+	return nil
 }

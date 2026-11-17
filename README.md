@@ -67,6 +67,7 @@ koya help [コマンド]
 | `-p 8080:8080` | ポートを公開する（複数可） |
 | `-v SRC:DST` | 追加でマウントする（複数可） |
 | `--rm` | 使い捨て: 新しいコンテナで実行し、終了したら削除する |
+| `--linux` / `--win` | Linux コンテナ（既定）/ Windows コンテナで動かす（下記） |
 | `--session[=名前]` | セッションの中で動かす（下記）。これはコンテナ作成時に限らず毎回効く |
 | `--home` / `--no-home` | 永続ホームを使う / 使わない（下記） |
 | `--home-scope shared\|project` | 永続ホームをプロファイルごとに共有するか、プロジェクトごとに分けるか |
@@ -124,16 +125,17 @@ koya run claude            # claude プロファイルは既定で有効
 koya run claude --no-home  # 無効にする
 ```
 
-置き場所は `<home.dir>/<プロファイル名>/` で、同じプロファイルなら全プロジェクトで共有します
+置き場所は `<home.linux.dir>/<プロファイル名>/` で、同じプロファイルなら全プロジェクトで共有します
 （Claude Code へのログインは1回で済みます）。設定は `~/.config/koya/config` に書きます。
 
 ```ini
-home.dir    = /mnt/pool/koya-home   # 置き場所（既定: ~/.local/share/koya/home）
+home.linux.dir = /mnt/pool/koya-home   # 置き場所（既定: ~/.local/share/koya/home。旧名の home.dir も読む）
+home.win.dir   = C:\koya\home-win      # --win の置き場所（既定: <home.linux.dir>-win）
 home.enable = python                # 既定で有効にするプロファイル（all で全部）
 home.scope  = shared                # shared: プロファイルごと / project: プロジェクトごと
 ```
 
-ランタイムが別のマシンやホストで動いている場合（リモートの Podman など）は、`home.dir` に
+ランタイムが別のマシンやホストで動いている場合（リモートの Podman など）は、`home.linux.dir` に
 ランタイム側から同じパスで見えるディレクトリを指定してください。
 
 ### Claude Code
@@ -191,6 +193,9 @@ Linux・macOS との違い:
 
 ### Windows コンテナ（`--win`）
 
+`run`・`ls`・`stop`・`rm`・`profiles`・`build` は、`--linux`（Linux コンテナ）か `--win`（Windows コンテナ）で対象を選びます。
+どちらも付けなければ `--linux` です。
+
 Windows 版の koya では、`--win` を付けると Linux コンテナの代わりに Windows コンテナ（プロセス分離）で動かせます。
 VM を挟まないので、Windows のドライブにあるファイルをネイティブに近い速さで読み書きできます。
 .NET Framework や MSBuild など、Windows のツールを隔離して使いたいときに向いています。
@@ -224,8 +229,8 @@ koya win status                # デーモンとホストの状態
 - **マウント**: Windows コンテナには C: ドライブしかないため、C: のディレクトリはそのままのパス、
   ほかのドライブは `C:\mnt\<ドライブ>\...` にマウントします（例: `D:\src\myapp` → `C:\mnt\d\src\myapp`）。
 - **永続ホーム（`--home`）**: `C:\Users\<ホストのユーザー名>` にマウントし、`USERPROFILE`・`HOME`・`APPDATA`・`LOCALAPPDATA` と
-  ユーザーのフォルダの設定（AppData・ドキュメント）をそこに向けます。置き場所は Linux 用と分けて `%LOCALAPPDATA%\koya\home-win`
-  （`home.dir` を変えた場合は `<home.dir>-win`）。Windows の API でホームそのものをたずねるツールや、
+  ユーザーのフォルダの設定（AppData・ドキュメント）をそこに向けます。置き場所は Linux 用と分けて、設定の `home.win.dir`
+  （既定は `<home.linux.dir>-win`、つまり `%LOCALAPPDATA%\koya\home-win`）。Windows の API でホームそのものをたずねるツールや、
   レジストリ（HKCU）に書かれる設定は残りません（Claude Code・git・npm・pip・uv は環境変数を見るので残ります）。
 - **使えないもの**: `--session`・`koya attach`。ユーザーは `ContainerAdministrator` です。
 - プロファイルを省略したときは `KOYA_WIN_PROFILE`、なければ `base` です（`.koya` は見ません）。

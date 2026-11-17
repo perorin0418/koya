@@ -42,3 +42,37 @@ func TestLoadMissingAndInvalid(t *testing.T) {
 		t.Fatal("unknown key must be an error")
 	}
 }
+
+func writeConf(t *testing.T, conf string) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	os.MkdirAll(filepath.Join(dir, "koya"), 0o755)
+	if err := os.WriteFile(filepath.Join(dir, "koya", "config"), []byte(conf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHomeRoot(t *testing.T) {
+	writeConf(t, "home.linux.dir = /pool/home\n")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.HomeRoot(false) != "/pool/home" || c.HomeRoot(true) != "/pool/home-win" {
+		t.Fatalf("linux=%q win=%q", c.HomeRoot(false), c.HomeRoot(true))
+	}
+
+	writeConf(t, "home.dir = /old/home\nhome.win.dir = /fast/win\n")
+	if c, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if c.HomeRoot(false) != "/old/home" || c.HomeRoot(true) != "/fast/win" {
+		t.Fatalf("linux=%q win=%q", c.HomeRoot(false), c.HomeRoot(true))
+	}
+
+	writeConf(t, "home.dir = /a\nhome.linux.dir = /b\n")
+	if _, err := Load(); err == nil {
+		t.Fatal("home.dir と home.linux.dir を両方書いたらエラーにすること")
+	}
+}

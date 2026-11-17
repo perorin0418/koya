@@ -2,7 +2,8 @@
 //
 // 形式は「キー = 値」の行。# 以降はコメント。
 //
-//	home.dir    = /mnt/pool/koya-home   # 永続ホームの置き場所
+//	home.linux.dir = /mnt/pool/koya-home   # 永続ホームの置き場所（Linux コンテナ用。旧名 home.dir も読む）
+//	home.win.dir   = C:\koya\home-win      # 永続ホームの置き場所（Windows コンテナ用。既定は <home.linux.dir>-win）
 //	home.enable = claude, python        # 既定で永続ホームを使うプロファイル（all で全部）
 //	home.scope  = shared                # shared（プロファイルごと）/ project（プロジェクトごと）
 package config
@@ -18,7 +19,8 @@ import (
 
 // Config は koya の設定。
 type Config struct {
-	HomeDir    string   // 永続ホームの置き場所
+	HomeDir    string   // 永続ホームの置き場所（Linux コンテナ用）
+	WinHomeDir string   // 永続ホームの置き場所（Windows コンテナ用）。空なら HomeDir + "-win"
 	HomeEnable []string // 既定で永続ホームを使うプロファイル
 	HomeScope  string   // shared / project
 	Path       string   // 読み込んだファイル（なければ空）
@@ -72,6 +74,7 @@ func Load() (*Config, error) {
 	defer f.Close()
 	c.Path = path
 	sc := bufio.NewScanner(f)
+	linuxKey := ""
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
 		if i := strings.Index(line, "#"); i >= 0 {
@@ -87,8 +90,14 @@ func Load() (*Config, error) {
 		}
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 		switch k {
-		case "home.dir":
+		case "home.linux.dir", "home.dir":
+			if linuxKey != "" && linuxKey != k {
+				return nil, fmt.Errorf("%s:%d: %s と %s は同じ設定です。home.linux.dir だけを書いてください", path, n, linuxKey, k)
+			}
+			linuxKey = k
 			c.HomeDir = expandHome(v)
+		case "home.win.dir":
+			c.WinHomeDir = expandHome(v)
 		case "home.enable":
 			c.HomeEnable = nil
 			for _, p := range strings.Split(v, ",") {
@@ -106,6 +115,22 @@ func Load() (*Config, error) {
 		}
 	}
 	return c, sc.Err()
+}
+
+// HomeRoot は永続ホームの置き場所を返す。win なら Windows コンテナ用。
+// Windows コンテナ用は、home.win.dir がなければ Linux 用の置き場所に -win を付けたもの
+// （中身の形式が違うため、Linux 用と混ぜない）。
+func (c *Config) HomeRoot(win bool) string {
+	if !win {
+		return c.HomeDir
+	}
+	if c.WinHomeDir != "" {
+		return c.WinHomeDir
+	}
+	if c.HomeDir == "" {
+		return ""
+	}
+	return filepath.Clean(c.HomeDir) + "-win"
 }
 
 // HomeEnabled は、そのプロファイルで既定で永続ホームを使うかを返す。
