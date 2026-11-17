@@ -3,6 +3,8 @@ package container
 import (
 	goruntime "runtime"
 	"strings"
+
+	"github.com/perorin0418/koya/internal/runtime"
 )
 
 // ContainerPath はホストのパスを、コンテナ内で使うパスに変換する。
@@ -21,6 +23,29 @@ func windowsToContainer(p string) string {
 		return "/" + strings.ToLower(p[:1]) + rest
 	}
 	return strings.ReplaceAll(p, `\`, "/")
+}
+
+// WinContainerPath はホストのパスを、Windows コンテナ（koya run --win）内で使うパスに変換する。
+// Windows コンテナの中には C: ドライブしかないため、C: のパスはそのまま、
+// ほかのドライブは C:\mnt\<ドライブ名>\... に置く（例: D:\src\app → C:\mnt\d\src\app）。
+func WinContainerPath(p string) string {
+	p = strings.TrimRight(strings.ReplaceAll(p, "/", `\`), `\`)
+	if len(p) >= 2 && p[1] == ':' && isASCIILetter(p[0]) {
+		drive := strings.ToLower(p[:1])
+		if drive == "c" {
+			return "C:" + p[2:]
+		}
+		return `C:\mnt\` + drive + p[2:]
+	}
+	return p
+}
+
+// containerPathFor はランタイムに合わせてコンテナ内のパスを返す。
+func containerPathFor(rt *runtime.Runtime, p string) string {
+	if rt != nil && rt.Windows {
+		return WinContainerPath(p)
+	}
+	return ContainerPath(p)
 }
 
 func isASCIILetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }

@@ -13,9 +13,22 @@ import (
 
 // Runtime は検出したコンテナランタイム。
 type Runtime struct {
-	Bin      string // 実行ファイルのパス
-	Kind     string // "podman" または "docker"
-	Rootless bool   // rootless で動いているか
+	Bin      string   // 実行ファイルのパス
+	Kind     string   // "podman" または "docker"
+	Rootless bool     // rootless で動いているか
+	Prefix   []string // すべてのコマンドの前に付ける引数（つなぐデーモンの指定など）
+	Windows  bool     // Windows コンテナ用のデーモン（koya run --win）につないでいるか
+}
+
+// ForWindows は koya 専用の Windows コンテナ用デーモンにつなぐ Runtime を返す。
+// bin は docker.exe、host はデーモンのアドレス（npipe:////./pipe/...）。
+func ForWindows(bin, host string) *Runtime {
+	return &Runtime{Bin: bin, Kind: "docker", Prefix: []string{"-H", host}, Windows: true}
+}
+
+// argv はコマンドの引数に Prefix を付ける。
+func (r *Runtime) argv(args []string) []string {
+	return append(append([]string(nil), r.Prefix...), args...)
 }
 
 // Detect は KOYA_RUNTIME、なければ podman → docker の順にランタイムを探す。
@@ -55,7 +68,7 @@ func (r *Runtime) detectRootless() bool {
 
 // Output はコマンドを実行して標準出力を返す。失敗時は標準エラーをエラーに含める。
 func (r *Runtime) Output(args ...string) (string, error) {
-	cmd := exec.Command(r.Bin, args...)
+	cmd := exec.Command(r.Bin, r.argv(args)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -71,7 +84,7 @@ func (r *Runtime) Output(args ...string) (string, error) {
 
 // Run はコマンドを実行する。標準出力は stderr に流す（koya の出力と混ぜないため）。
 func (r *Runtime) Run(args ...string) error {
-	cmd := exec.Command(r.Bin, args...)
+	cmd := exec.Command(r.Bin, r.argv(args)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -79,6 +92,11 @@ func (r *Runtime) Run(args ...string) error {
 		return fmt.Errorf("%s %s に失敗しました: %w", filepath.Base(r.Bin), args[0], err)
 	}
 	return nil
+}
+
+// Command は Prefix を付けたコマンドを返す（標準入出力の接続は呼び出し側で行う）。
+func (r *Runtime) Command(args ...string) *exec.Cmd {
+	return exec.Command(r.Bin, r.argv(args)...)
 }
 
 // Quiet はコマンドを出力なしで実行し、成否だけを返す。

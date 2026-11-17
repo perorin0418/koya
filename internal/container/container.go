@@ -32,6 +32,21 @@ var DefaultShell = []string{"sh", "-c",
 		`if [ -f /etc/koya/bashrc ] && command -v bash >/dev/null 2>&1; then exec bash --rcfile /etc/koya/bashrc -i; ` +
 		`elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec sh -i; fi`}
 
+// WinShell は Windows コンテナでシェルを起動するコマンド。
+// PowerShell 7（pwsh.exe）があればそれを、なければ Windows PowerShell を使う。
+// 標準入力が端末なら対話シェル、パイプならスクリプトとして読む。
+func WinShell(tty bool) []string {
+	args := "-NoLogo"
+	if !tty {
+		args = "-NoLogo -NoProfile -Command -"
+	}
+	return []string{"cmd.exe", "/d", "/c",
+		"where /q pwsh.exe & if errorlevel 1 (powershell.exe " + args + ") else (pwsh.exe " + args + ")"}
+}
+
+// winKeepAlive は Windows コンテナを常駐させるコマンド（sleep infinity の代わり）。
+var winKeepAlive = []string{"-NoLogo", "-NoProfile", "-Command", "while ($true) { Start-Sleep -Seconds 3600 }"}
+
 // Options はコンテナ作成時の設定。
 type Options struct {
 	Net      string
@@ -202,10 +217,15 @@ type Spec struct {
 	Hash    string
 	Opts    Options
 	User    User
+
+	Isolation string // Windows コンテナの分離の方式（process / hyperv）。Linux コンテナでは空
 }
 
 // RunArgs は run コマンドの共通引数（イメージ名の手前まで）を返す。
 func RunArgs(rt *runtime.Runtime, s Spec) []string {
+	if rt.Windows {
+		return winRunArgs(s)
+	}
 	ctrWorkdir := ContainerPath(s.Workdir)
 	mount := s.Workdir + ":" + ctrWorkdir + mountSuffix(s.Opts.ReadOnly)
 	args := []string{
@@ -226,6 +246,128 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 	}
 	args = append(args, "-v", mount, "-w", ctrWorkdir)
 	args = append(args, userArgs(rt, s.User)...)
+	if s.Opts.Net != "" {
+		args = append(args, "--network", s.Opts.Net)
+	}
+	for _, e := range s.Opts.Env {
+		args = append(args, "-e", e)
+	}
+	for _, p := range s.Opts.Ports {
+		args = append(args, "-p", p)
+	}
+	for _, v := range s.Opts.Volumes {
+		args = append(args, "-v", v)
+	}
+	return args
+}
+
+// Windows コンテナの永続ホーム
+//
+// Windows コンテナでは、中身のあるディレクトリ（C:\Users\ContainerAdministrator など）にはマウントできない。
+// また、コンテナ内にホストと同じ名前のユーザーを作っても、ホストのユーザーとは別人として扱われ
+// （プロジェクトに書き込めない）、ホームも別の場所（<名前>.<ホスト名>）に作られてしまう。
+// そこで、ユーザーは ContainerAdministrator のまま、イメージにない C:\Users\<ホストのユーザー名> に
+// 永続ホームをマウントし、環境変数とユーザーのフォルダの設定（User Shell Folders）でホームをそこに向ける。
+
+// WinHomeDirs は永続ホームの中に、マウントする前に作っておくディレクトリ。
+var WinHomeDirs = []string{`AppData\Roaming`, `AppData\Local`, "Documents"}
+
+// winReserved はイメージに元からある C:\Users の下の名前（ここにはマウントできない）。
+var winReserved = []string{"administrator", "containeradministrator", "containeruser", "public", "default", "default user", "all users"}
+
+// WinUser は Windows コンテナで永続ホームに使うユーザー（名前とホームのパス）を返す。
+// username は DOMAIN\name の形でもよい。
+func WinUser(username string) User {
+	if i := strings.LastIndex(username, `\`); i >= 0 {
+		username = username[i+1:]
+	}
+	name := strings.Trim(strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`<>:"/\|?*`, r) || r < 0x20 {
+			return '_'
+		}
+		return r
+	}, username), " .")
+	if name == "" {
+		name = "user"
+	}
+	for _, r := range winReserved {
+		if strings.EqualFold(name, r) {
+			name = "koya-" + name
+			break
+		}
+	}
+	return User{Name: name, Home: `C:\Users\` + name}
+}
+
+// WinHomeMountpoint は、作業ディレクトリが永続ホームの下にあるとき、永続ホームの中に作っておくべき
+// ディレクトリ（永続ホームからの相対パス）を返す。下になければ空文字。
+// Windows コンテナでは、マウントの内側に別のマウントを重ねても途中のディレクトリが作られないため、
+// 途中のディレクトリ（例: C:\Users\me\src）を lstat すると「存在しない」になる（Node の fs.realpathSync が失敗する）。
+// Linux の Docker と同じように、マウント先のディレクトリを永続ホームの中に作っておく。
+func WinHomeMountpoint(home, workdir string) string {
+	ctr := WinContainerPath(workdir)
+	prefix := strings.TrimRight(home, `\`) + `\`
+	if len(ctr) <= len(prefix) || !strings.EqualFold(ctr[:len(prefix)], prefix) {
+		return ""
+	}
+	return ctr[len(prefix):]
+}
+
+// winHomeEnv は永続ホームを使うときに、ホームの場所を差し替える環境変数。
+func winHomeEnv(home string) []string {
+	return []string{
+		"USERPROFILE=" + home,
+		"HOME=" + home,
+		`APPDATA=` + home + `\AppData\Roaming`,
+		`LOCALAPPDATA=` + home + `\AppData\Local`,
+	}
+}
+
+// winShellFolders は、Windows の API（SHGetKnownFolderPath）でフォルダの場所をたずねるツールのために、
+// ContainerAdministrator の User Shell Folders を永続ホームに向けるコマンドを返す（コンテナ作成時に実行する）。
+// cmd.exe を通さず reg.exe に引数を直接渡す（引用符の受け渡しで崩れないように）。
+// ホームそのもの（FOLDERID_Profile）は差し替えられない。
+func winShellFolders(home string) [][]string {
+	const key = `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders`
+	var cmds [][]string
+	for _, f := range [][2]string{
+		{"AppData", home + `\AppData\Roaming`},
+		{"Local AppData", home + `\AppData\Local`},
+		{"Personal", home + `\Documents`},
+	} {
+		cmds = append(cmds, []string{"reg.exe", "add", key, "/v", f[0], "/t", "REG_EXPAND_SZ", "/d", f[1], "/f"})
+	}
+	return cmds
+}
+
+// winRunArgs は Windows コンテナの run の共通引数。
+// ユーザーはイメージの既定（ContainerAdministrator）のまま。永続ホームは s.User.Home にマウントする。
+func winRunArgs(s Spec) []string {
+	ctrWorkdir := WinContainerPath(s.Workdir)
+	mount := s.Workdir + ":" + ctrWorkdir
+	if s.Opts.ReadOnly {
+		mount += ":ro"
+	}
+	args := []string{
+		"--label", LabelManaged + "=true",
+		"--label", LabelProfile + "=" + s.Profile,
+		"--label", LabelWorkdir + "=" + s.Workdir,
+		"--label", LabelHash + "=" + s.Hash,
+		"--label", LabelOpts + "=" + s.Opts.Key(),
+		"--hostname", "koya-" + s.Profile,
+		"-e", "KOYA_PROFILE=" + s.Profile,
+	}
+	// ホームを先にマウントし、作業ディレクトリがホームの下にあっても上から重ねられるようにする
+	if s.Opts.Home != "" {
+		args = append(args, "-v", s.Opts.Home+":"+s.User.Home)
+		for _, e := range winHomeEnv(s.User.Home) {
+			args = append(args, "-e", e)
+		}
+	}
+	args = append(args, "-v", mount, "-w", ctrWorkdir)
+	if s.Isolation != "" {
+		args = append(args, "--isolation", s.Isolation)
+	}
 	if s.Opts.Net != "" {
 		args = append(args, "--network", s.Opts.Net)
 	}
@@ -310,6 +452,9 @@ func Setup(rt *runtime.Runtime, name string, u User) error {
 
 // Create は常駐用のコンテナを作って起動し、ユーザーを登録する。
 func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
+	if rt.Windows {
+		return createWin(rt, name, s, labels)
+	}
 	args := []string{"run", "-d", "--init", "--name", name, "--entrypoint", "sleep"}
 	for _, l := range labels {
 		args = append(args, "--label", l)
@@ -326,16 +471,39 @@ func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
 	return nil
 }
 
+// createWin は Windows コンテナを作って起動する。ユーザーの登録はしない。
+// 永続ホームを使う場合は、ユーザーのフォルダの設定を永続ホームに向ける。
+func createWin(rt *runtime.Runtime, name string, s Spec, labels []string) error {
+	args := []string{"run", "-d", "--name", name, "--entrypoint", "powershell.exe"}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
+	args = append(args, winRunArgs(s)...)
+	args = append(args, profile.ImageName(s.Profile))
+	if err := rt.Quiet(append(args, winKeepAlive...)...); err != nil {
+		return err
+	}
+	if s.Opts.Home != "" {
+		for _, c := range winShellFolders(s.User.Home) {
+			if err := rt.Quiet(append([]string{"exec", name}, c...)...); err != nil {
+				_ = rt.Quiet("rm", "-f", name)
+				return fmt.Errorf("永続ホームのフォルダの設定に失敗しました: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 // ExecArgs は exec コマンドの引数を返す。workdir はホストのパス。
-func ExecArgs(name, workdir string, tty bool, cmd []string) []string {
+func ExecArgs(rt *runtime.Runtime, name, workdir string, tty bool, cmd []string) []string {
 	args := []string{"exec", "-i"}
 	if tty {
 		args = append(args, "-t")
-		if term := os.Getenv("TERM"); term != "" {
+		if term := os.Getenv("TERM"); term != "" && !rt.Windows {
 			args = append(args, "-e", "TERM="+term)
 		}
 	}
-	args = append(args, "-w", ContainerPath(workdir), name)
+	args = append(args, "-w", containerPathFor(rt, workdir), name)
 	return append(args, cmd...)
 }
 

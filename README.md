@@ -67,6 +67,7 @@ koya help [コマンド]
 | `-p 8080:8080` | ポートを公開する（複数可） |
 | `-v SRC:DST` | 追加でマウントする（複数可） |
 | `--rm` | 使い捨て: 新しいコンテナで実行し、終了したら削除する |
+| `--linux` / `--win` | Linux コンテナ（既定）/ Windows コンテナで動かす（下記） |
 | `--session[=名前]` | セッションの中で動かす（下記）。これはコンテナ作成時に限らず毎回効く |
 | `--home` / `--no-home` | 永続ホームを使う / 使わない（下記） |
 | `--home-scope shared\|project` | 永続ホームをプロファイルごとに共有するか、プロジェクトごとに分けるか |
@@ -124,16 +125,17 @@ koya run claude            # claude プロファイルは既定で有効
 koya run claude --no-home  # 無効にする
 ```
 
-置き場所は `<home.dir>/<プロファイル名>/` で、同じプロファイルなら全プロジェクトで共有します
+置き場所は `<home.linux.dir>/<プロファイル名>/` で、同じプロファイルなら全プロジェクトで共有します
 （Claude Code へのログインは1回で済みます）。設定は `~/.config/koya/config` に書きます。
 
 ```ini
-home.dir    = /mnt/pool/koya-home   # 置き場所（既定: ~/.local/share/koya/home）
+home.linux.dir = /mnt/pool/koya-home   # 置き場所（既定: ~/.local/share/koya/home。旧名の home.dir も読む）
+home.win.dir   = C:\koya\home-win      # --win の置き場所（既定: <home.linux.dir>-win）
 home.enable = python                # 既定で有効にするプロファイル（all で全部）
 home.scope  = shared                # shared: プロファイルごと / project: プロジェクトごと
 ```
 
-ランタイムが別のマシンやホストで動いている場合（リモートの Podman など）は、`home.dir` に
+ランタイムが別のマシンやホストで動いている場合（リモートの Podman など）は、`home.linux.dir` に
 ランタイム側から同じパスで見えるディレクトリを指定してください。
 
 ### Claude Code
@@ -189,11 +191,61 @@ Linux・macOS との違い:
   その場合は Windows Terminal を使うか、`winpty koya run` で起動してください。
 - WSL2 の中で Linux 版を使うこともできます。プロジェクトを WSL2 側（`/home/...`）に置くと、ファイルのアクセスが速くなります。
 
+### Windows コンテナ（`--win`）
+
+`run`・`ls`・`stop`・`rm`・`profiles`・`build` は、`--linux`（Linux コンテナ）か `--win`（Windows コンテナ）で対象を選びます。
+どちらも付けなければ `--linux` です。
+
+Windows 版の koya では、`--win` を付けると Linux コンテナの代わりに Windows コンテナ（プロセス分離）で動かせます。
+VM を挟まないので、Windows のドライブにあるファイルをネイティブに近い速さで読み書きできます。
+.NET Framework や MSBuild など、Windows のツールを隔離して使いたいときに向いています。
+
+```powershell
+cd D:\src\myapp
+koya run --win                 # Windows の base 環境（PowerShell）に入る
+koya ls --win
+koya rm -f --win base
+koya win status                # デーモンとホストの状態
+```
+
+- **koya 専用のデーモン**: Docker の公式の静的バイナリ（`dockerd.exe`、版は固定）を初めて使うときに自動で取ってきて、
+  SHA-256 を照合してから `%ProgramFiles%\koya\` に置き、Windows サービス `koya-docker` として登録します。
+  このとき管理者権限の確認（UAC）が出ます。Rancher Desktop・Docker Desktop とは別のパイプ（`\\.\pipe\koya_docker`）と
+  データの置き場所（`%ProgramData%\koya\`）を使うので、ぶつかりません。
+- **前提**: Windows の「コンテナー」機能（Pro / Enterprise / Education。Home は不可）。有効でなければ有効にする手順を表示します。
+  有効にするには管理者権限と再起動が必要です。
+- **プロファイル**: Windows 用の別系統です。同梱は次の5つです（ツールの版とハッシュは Dockerfile に固定）。
+
+  | 名前 | 中身 |
+  |---|---|
+  | `base` | Server Core + PowerShell 7 + Git for Windows（`C:\Git`。bash も入る） |
+  | `node` | base + Node.js LTS、npm、corepack |
+  | `python` | base + Python 3.14、pip、venv、uv |
+  | `dotnet` | base + .NET SDK 10（LTS） |
+  | `claude` | node + Claude Code（既定で永続ホームを使う） |
+
+  `%APPDATA%\koya\profiles-win\<名前>\Dockerfile` で追加できます。ベースイメージのタグは、
+  ホストのビルドに合わせて koya が選び、ビルド引数 `BASE_TAG` で渡します。
+- **マウント**: Windows コンテナには C: ドライブしかないため、C: のディレクトリはそのままのパス、
+  ほかのドライブは `C:\mnt\<ドライブ>\...` にマウントします（例: `D:\src\myapp` → `C:\mnt\d\src\myapp`）。
+- **永続ホーム（`--home`）**: `C:\Users\<ホストのユーザー名>` にマウントし、`USERPROFILE`・`HOME`・`APPDATA`・`LOCALAPPDATA` と
+  ユーザーのフォルダの設定（AppData・ドキュメント）をそこに向けます。置き場所は Linux 用と分けて、設定の `home.win.dir`
+  （既定は `<home.linux.dir>-win`、つまり `%LOCALAPPDATA%\koya\home-win`）。Windows の API でホームそのものをたずねるツールや、
+  レジストリ（HKCU）に書かれる設定は残りません（Claude Code・git・npm・pip・uv は環境変数を見るので残ります）。
+- **使えないもの**: `--session`・`koya attach`。ユーザーは `ContainerAdministrator` です。
+- プロファイルを省略したときは `KOYA_WIN_PROFILE`、なければ `base` です（`.koya` は見ません）。
+- 外すときは `koya win uninstall`（イメージとコンテナは `%ProgramData%\koya\docker` に残ります）。
+
+詳しくは `koya help win` を参照。
+
 ## 環境変数
 
 | 名前 | 意味 |
 |---|---|
 | `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` など）。既定は podman → docker の順に自動検出 |
 | `KOYA_PROFILE` | 既定のプロファイル |
+| `KOYA_WIN_PROFILE` | `--win` のときの既定のプロファイル |
+| `KOYA_WIN_BASE_TAG` | `--win` のベースイメージ（servercore）のタグ。既定はホストのビルドから自動で選ぶ |
+| `KOYA_WIN_ISOLATION` | `--win` の分離の方式（`process` / `hyperv`）。既定はホストのビルドから自動で選ぶ |
 
 `koya help config` で設定ファイルの書き方を表示します。設計の詳細は [docs/design.md](docs/design.md) を参照。

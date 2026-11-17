@@ -3,7 +3,7 @@ package koya
 
 import "embed"
 
-// Profiles は profiles/<名前>/ 以下のファイルを持つ。
+// Profiles は profiles/<名前>/（Linux コンテナ用）と profiles-win/<名前>/（Windows コンテナ用）以下のファイルを持つ。
 //
-//go:embed all:profiles
+//go:embed all:profiles all:profiles-win
 var Profiles embed.FS
