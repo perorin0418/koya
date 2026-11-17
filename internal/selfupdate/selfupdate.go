@@ -36,6 +36,10 @@ type Release struct {
 
 // Latest は最新リリースを調べる。
 func Latest() (*Release, error) {
+	return latestWith(client)
+}
+
+func latestWith(c *http.Client) (*Release, error) {
 	var body struct {
 		TagName string `json:"tag_name"`
 		Assets  []struct {
@@ -43,7 +47,7 @@ func Latest() (*Release, error) {
 			URL  string `json:"browser_download_url"`
 		} `json:"assets"`
 	}
-	data, err := get("https://api.github.com/repos/" + Repo + "/releases/latest")
+	data, err := getWith(c, "https://api.github.com/repos/"+Repo+"/releases/latest")
 	if err != nil {
 		return nil, fmt.Errorf("最新リリースを調べられません: %w", err)
 	}
@@ -58,6 +62,10 @@ func Latest() (*Release, error) {
 }
 
 func get(url string) ([]byte, error) {
+	return getWith(client, url)
+}
+
+func getWith(c *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -70,7 +78,7 @@ func get(url string) ([]byte, error) {
 			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 	}
-	resp, err := client.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}
