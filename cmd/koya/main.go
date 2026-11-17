@@ -54,6 +54,7 @@ run・ls・stop・rm・profiles・build は、--linux（Linux コンテナ。省
 環境変数:
   KOYA_RUNTIME   使うランタイム（podman / docker）。既定は podman → docker の順に自動検出
   KOYA_PROFILE   既定のプロファイル
+  KOYA_NO_UPDATE_CHECK  設定すると、起動時に新しい版を確かめない
 `
 
 const runUsage = `使い方: koya run [プロファイル] [オプション] [-- コマンド...]
@@ -152,6 +153,7 @@ func run(args []string) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
+	notifyUpdate(cmd, rest)
 	switch cmd {
 	case "run":
 		return cmdRun(rest)
@@ -187,6 +189,27 @@ func run(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("%q というコマンドはありません（koya help で一覧を表示）", cmd)
+	}
+}
+
+// notifyUpdate は、新しい版が出ていれば stderr にお知らせする。
+// GitHub への問い合わせは selfupdate.CheckInterval ごと（1 日に数回）で、それ以外は前回の結果を使う。
+// 端末でないとき（スクリプトから呼ばれたとき）や、KOYA_NO_UPDATE_CHECK が設定されているときは何もしない。
+func notifyUpdate(cmd string, rest []string) {
+	switch cmd {
+	case "self-update", "version", "--version", "help", "-h", "--help":
+		return
+	case "win":
+		// 管理者権限で自分自身を実行するとき（_install など）は対象外
+		if len(rest) > 0 && strings.HasPrefix(rest[0], "_") {
+			return
+		}
+	}
+	if os.Getenv("KOYA_NO_UPDATE_CHECK") != "" || !isTTY(os.Stderr) {
+		return
+	}
+	if msg := selfupdate.Notice(getVersion(), selfupdate.StatePath()); msg != "" {
+		fmt.Fprintln(os.Stderr, "koya:", msg)
 	}
 }
 
