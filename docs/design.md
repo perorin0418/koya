@@ -110,7 +110,7 @@ home.scope  = shared                # shared / project
 | `go` | base | Go 最新安定版, gcc（cgo 用） |
 | `claude` | node | Claude Code。永続ホームが既定で有効。自動アップデートは切り、`koya build claude` で更新する |
 
-- プロファイルは `profiles/<名前>/Dockerfile` に置き、`go:embed` でバイナリに埋め込む。
+- プロファイルは `profiles-linux/<名前>/Dockerfile` に置き、`go:embed` でバイナリに埋め込む。
 - `base` 以外は `FROM localhost/koya/base` で base を引き継ぐ。依存するイメージは自動で先にビルドする。
 - イメージ名は `localhost/koya/<名前>:latest`。`localhost/` を付けるのは、ローカルにないときに
   Docker Hub の同名イメージ（第三者のもの）を取ってこないようにするため。
@@ -119,7 +119,8 @@ home.scope  = shared                # shared / project
 
 ### ユーザー定義プロファイル
 
-`~/.config/koya/profiles/<名前>/Dockerfile` を置くと、プロファイルとして使える。
+`~/.config/koya/profiles-linux/<名前>/Dockerfile` を置くと、プロファイルとして使える。
+旧名の `~/.config/koya/profiles` に置いたものも読む（両方にあれば `profiles-linux` を優先）。
 同名の同梱プロファイルがある場合はユーザー定義を優先する（同梱の上書き）。
 
 ## 隔離のオプション
@@ -314,7 +315,7 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 
 | 項目 | Linux コンテナ | Windows コンテナ |
 |---|---|---|
-| プロファイル | `profiles/`・`%APPDATA%\koya\profiles` | `profiles-win/`・`%APPDATA%\koya\profiles-win`（別系統。イメージ名は同じ `localhost/koya/<名前>` だがデーモンが別） |
+| プロファイル | `profiles-linux/`・`%APPDATA%\koya\profiles-linux`（旧名 `profiles` も読む） | `profiles-win/`・`%APPDATA%\koya\profiles-win`（別系統。イメージ名は同じ `localhost/koya/<名前>` だがデーモンが別） |
 | 常駐 | `--init` + `sleep infinity` | `powershell.exe` で `Start-Sleep` を繰り返す（`--init` はない） |
 | マウント | `/c/...` に変換 | C: はそのまま、ほかのドライブは `C:\mnt\<ドライブ>\...`（コンテナには C: しかない） |
 | ユーザー | ホストのユーザーを登録 | イメージの既定（ContainerAdministrator）。登録しない |
@@ -371,7 +372,7 @@ koya/
 ├── internal/profile/       プロファイルの解決、埋め込み、ビルド
 ├── internal/container/     名前付け、作成、exec、ls/stop/rm
 ├── scripts/build-release.sh  リリース用バイナリの作成
-├── profiles/               同梱プロファイル（go:embed 対象）
+├── profiles-linux/         同梱プロファイル（Linux コンテナ用。go:embed 対象）
 │   ├── base/Dockerfile, bashrc
 │   ├── python/Dockerfile
 │   ├── node/Dockerfile
