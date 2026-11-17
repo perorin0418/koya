@@ -29,3 +29,18 @@ func TestWinContainerPath(t *testing.T) {
 		}
 	}
 }
+
+func TestWinHomeMountpoint(t *testing.T) {
+	cases := []struct{ home, wd, want string }{
+		{`C:\Users\gcom0154`, `C:\Users\gcom0154\src\koya-b`, `src\koya-b`},
+		{`C:\Users\gcom0154`, `c:\users\GCOM0154\src\app\`, `src\app`},
+		{`C:\Users\gcom0154`, `C:\Users\gcom01540\src`, ``},
+		{`C:\Users\gcom0154`, `C:\tmp`, ``},
+		{`C:\Users\gcom0154`, `D:\src\app`, ``},
+	}
+	for _, c := range cases {
+		if got := WinHomeMountpoint(c.home, c.wd); got != c.want {
+			t.Errorf("WinHomeMountpoint(%q, %q) = %q, want %q", c.home, c.wd, got, c.want)
+		}
+	}
+}

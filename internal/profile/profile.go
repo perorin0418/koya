@@ -39,6 +39,7 @@ type Profile struct {
 
 var (
 	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
+	argRe  = regexp.MustCompile(`(?im)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)`)
 	fromRe = regexp.MustCompile(`(?i)^\s*FROM\s+(?:--\S+\s+)*(?:localhost/)?koya/([a-z0-9][a-z0-9_.-]*)(?::latest)?(?:\s|$)`)
 )
 
@@ -286,7 +287,7 @@ func (s *Store) build(rt *runtime.Runtime, p *Profile, hash string) error {
 		"--label", "koya.profile=" + p.Name,
 		"--label", "koya.hash=" + hash,
 	}
-	for _, a := range s.BuildArgs {
+	for _, a := range usedBuildArgs(p.Files["Dockerfile"], s.BuildArgs) {
 		args = append(args, "--build-arg", a)
 	}
 	args = append(args, s.BuildFlags...)
@@ -295,6 +296,23 @@ func (s *Store) build(rt *runtime.Runtime, p *Profile, hash string) error {
 		return errors.New("イメージのビルドに失敗しました: " + err.Error())
 	}
 	return nil
+}
+
+// usedBuildArgs は、Dockerfile が ARG で宣言しているビルド引数だけを返す
+// （宣言していない引数を渡すと、docker build が「使われなかった」と警告するため）。
+func usedBuildArgs(dockerfile []byte, buildArgs []string) []string {
+	declared := map[string]bool{}
+	for _, m := range argRe.FindAllStringSubmatch(string(dockerfile), -1) {
+		declared[m[1]] = true
+	}
+	var out []string
+	for _, a := range buildArgs {
+		k, _, _ := strings.Cut(a, "=")
+		if declared[k] {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // ImageLabel はビルド済みイメージのラベルの値を返す。なければ空文字。

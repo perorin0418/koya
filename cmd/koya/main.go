@@ -105,10 +105,15 @@ Windows 版の koya でだけ使えます（WSL の中の koya からは使え�
     取ってきて（SHA-256 を照合）、Windows サービス koya-docker として登録します。管理者権限の確認が出ます。
     Rancher Desktop・Docker Desktop のデーモンとは別に動き、ぶつかりません。
   - Windows の「コンテナー」機能が必要です（有効でなければ、有効にする手順を表示します）。
-  - プロファイルは Windows 用の別系統です（同梱: base。ユーザー定義: %APPDATA%\koya\profiles-win\<名前>\Dockerfile）。
+  - プロファイルは Windows 用の別系統です（同梱: base・node・python・dotnet・claude。
+    ユーザー定義: %APPDATA%\koya\profiles-win\<名前>\Dockerfile）。
     ベースイメージ（servercore）のタグはホストのビルドに合わせて自動で選び、ビルド引数 BASE_TAG で渡します。
   - カレントディレクトリは、C: ならそのままのパス、ほかのドライブなら C:\mnt\<ドライブ>\... にマウントします。
-  - --session・attach・永続ホーム（--home）は使えません。ユーザーは ContainerAdministrator です。
+  - --session・attach は使えません。ユーザーは ContainerAdministrator です。
+  - 永続ホーム（--home）は C:\Users\<ホストのユーザー名> にマウントし、USERPROFILE・HOME・APPDATA・
+    LOCALAPPDATA とユーザーのフォルダの設定をそこに向けます。置き場所は <home.dir>-win
+    （既定 %LOCALAPPDATA%\koya\home-win）。Windows の API でホームそのものをたずねるツールや、
+    レジストリ（HKCU）に書かれる設定は残りません。
   - プロファイルを省略したときは、環境変数 KOYA_WIN_PROFILE、なければ base です（.koya は見ません）。
 
 koya win status      デーモンとホストの状態を表示する
@@ -286,9 +291,6 @@ func cmdRun(args []string) error {
 		if session.enabled {
 			return errors.New("--win では --session を使えません")
 		}
-		if home || homeScope != "" {
-			return errors.New("--win では永続ホーム（--home / --home-scope）を使えません")
-		}
 	}
 	prof := ""
 	switch {
@@ -306,6 +308,9 @@ func cmdRun(args []string) error {
 	user, err := hostUser()
 	if err != nil {
 		return err
+	}
+	if win {
+		user = container.WinUser(hostUsername())
 	}
 
 	var rt *runtime.Runtime
@@ -333,9 +338,8 @@ func cmdRun(args []string) error {
 	}
 
 	// 永続ホーム: --home / --no-home → 設定ファイル → プロファイルの LABEL koya.home の順に決める
-	// （Windows コンテナでは使わない）
-	useHome := !win && (cfg.HomeEnabled(prof) || profile.ImageLabel(rt, prof, "koya.home") == "true")
-	if home && !win {
+	useHome := cfg.HomeEnabled(prof) || profile.ImageLabel(rt, prof, "koya.home") == "true"
+	if home {
 		useHome = true
 	} else if noHome {
 		useHome = false
@@ -348,12 +352,29 @@ func cmdRun(args []string) error {
 		if cfg.HomeDir == "" {
 			return errors.New("永続ホームの置き場所が決められません（設定ファイルに home.dir を書いてください）")
 		}
-		dir := filepath.Join(cfg.HomeDir, prof)
+		// Windows コンテナの永続ホームは Linux 用と中身が違うため、<home.dir>-win に分ける
+		root := cfg.HomeDir
+		if win {
+			root = filepath.Clean(root) + "-win"
+		}
+		dir := filepath.Join(root, prof)
 		if scope == "project" {
-			dir = filepath.Join(cfg.HomeDir, container.Name(prof, wd))
+			dir = filepath.Join(root, container.Name(prof, wd))
 		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("永続ホーム %s を作れません: %w", dir, err)
+		}
+		if win {
+			// Windows コンテナはマウント元がないと起動しないため、差し替える先のフォルダを先に作る
+			subs := append([]string(nil), container.WinHomeDirs...)
+			if rel := container.WinHomeMountpoint(user.Home, wd); rel != "" {
+				subs = append(subs, rel)
+			}
+			for _, sub := range subs {
+				if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+					return fmt.Errorf("永続ホーム %s を作れません: %w", dir, err)
+				}
+			}
 		}
 		opts.Home = dir
 	}
@@ -451,6 +472,14 @@ func hostUser() (container.User, error) {
 		home = "/home/" + u.Username
 	}
 	return container.User{Name: u.Username, UID: uid, GID: gid, Home: home}, nil
+}
+
+// hostUsername はホストのユーザー名をそのまま返す（Windows では DOMAIN\name の形）。
+func hostUsername() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return os.Getenv("USERNAME")
 }
 
 // workdir はカレントディレクトリの絶対パスを返す。

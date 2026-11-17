@@ -209,12 +209,25 @@ koya win status                # デーモンとホストの状態
   データの置き場所（`%ProgramData%\koya\`）を使うので、ぶつかりません。
 - **前提**: Windows の「コンテナー」機能（Pro / Enterprise / Education。Home は不可）。有効でなければ有効にする手順を表示します。
   有効にするには管理者権限と再起動が必要です。
-- **プロファイル**: Windows 用の別系統です（同梱は `base`: Server Core + Windows PowerShell）。
+- **プロファイル**: Windows 用の別系統です。同梱は次の5つです（ツールの版とハッシュは Dockerfile に固定）。
+
+  | 名前 | 中身 |
+  |---|---|
+  | `base` | Server Core + PowerShell 7 + Git for Windows（`C:\Git`。bash も入る） |
+  | `node` | base + Node.js LTS、npm、corepack |
+  | `python` | base + Python 3.14、pip、venv、uv |
+  | `dotnet` | base + .NET SDK 10（LTS） |
+  | `claude` | node + Claude Code（既定で永続ホームを使う） |
+
   `%APPDATA%\koya\profiles-win\<名前>\Dockerfile` で追加できます。ベースイメージのタグは、
   ホストのビルドに合わせて koya が選び、ビルド引数 `BASE_TAG` で渡します。
 - **マウント**: Windows コンテナには C: ドライブしかないため、C: のディレクトリはそのままのパス、
   ほかのドライブは `C:\mnt\<ドライブ>\...` にマウントします（例: `D:\src\myapp` → `C:\mnt\d\src\myapp`）。
-- **使えないもの**: `--session`・`koya attach`・永続ホーム（`--home`）。ユーザーは `ContainerAdministrator` です。
+- **永続ホーム（`--home`）**: `C:\Users\<ホストのユーザー名>` にマウントし、`USERPROFILE`・`HOME`・`APPDATA`・`LOCALAPPDATA` と
+  ユーザーのフォルダの設定（AppData・ドキュメント）をそこに向けます。置き場所は Linux 用と分けて `%LOCALAPPDATA%\koya\home-win`
+  （`home.dir` を変えた場合は `<home.dir>-win`）。Windows の API でホームそのものをたずねるツールや、
+  レジストリ（HKCU）に書かれる設定は残りません（Claude Code・git・npm・pip・uv は環境変数を見るので残ります）。
+- **使えないもの**: `--session`・`koya attach`。ユーザーは `ContainerAdministrator` です。
 - プロファイルを省略したときは `KOYA_WIN_PROFILE`、なければ `base` です（`.koya` は見ません）。
 - 外すときは `koya win uninstall`（イメージとコンテナは `%ProgramData%\koya\docker` に残ります）。
 

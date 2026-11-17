@@ -262,6 +262,50 @@ Rancher Desktop は Windows コンテナに対応していないため、koya �
 - タグは `--build-arg BASE_TAG=<タグ>` で Dockerfile に渡し、ビルド引数もイメージのハッシュに含める（ホストを上げたら再ビルド）。
 - `build` と `run` に `--isolation` を付ける（クライアント版 Windows の既定は hyperv のため）。
 
+### Windows コンテナの永続ホーム
+
+Windows コンテナでは、C: の中身のあるディレクトリにはマウントできない（Docker のドキュメント: マウント先は
+「存在しないか空のディレクトリ、または C: 以外のドライブ」）。そのため `C:\Users\ContainerAdministrator` に重ねられない。
+
+- ユーザーは ContainerAdministrator のまま、イメージにない `C:\Users\<ホストのユーザー名>` に永続ホームをマウントする
+  （ホストの `DOMAIN\name` の name。イメージにある名前（Administrator・Public など）とぶつかるときは `koya-` を付ける）
+- `USERPROFILE`・`HOME`・`APPDATA`・`LOCALAPPDATA` をそこに向ける（Node・Python・git などは環境変数でホームを決める）
+- コンテナ作成時に ContainerAdministrator の `User Shell Folders`（AppData・Local AppData・Personal）も向ける
+  （`SHGetKnownFolderPath` でたずねるツール向け）。`reg.exe` に引数を直接渡す（`cmd /c` だと引用符が崩れる）
+- 残らないもの: API でホームそのもの（FOLDERID_Profile）をたずねるツールの書き込み、レジストリ（HKCU）の設定
+- 置き場所は `<home.dir>-win`（既定 `%LOCALAPPDATA%\koya\home-win`）。Linux 用と中身が違うため分ける。
+  マウント元がないと Windows コンテナは起動しないため、`AppData\Roaming`・`AppData\Local`・`Documents` を先に作る
+- 永続ホームを先にマウントし、その下の作業ディレクトリを重ねる（入れ子のマウントが動くことを確認済み）
+- 入れ子のマウントでは、途中のディレクトリ（`C:\Users\<名前>\src` など）が作られず、lstat すると「存在しない」になる
+  （Linux の Docker は作る）。Node の `fs.realpathSync` が失敗し、Claude Code が作業ディレクトリを開けない。
+  そのため、作業ディレクトリが永続ホームの下にあるときは、永続ホームの中にマウント先のディレクトリを空で作っておく
+
+ホストと同じ名前のユーザーをコンテナ内に作って動かす案（`net user /add` + `exec -u`）は、実機で試して採らなかった（2026-11-17）:
+- パスワード付きのユーザーは `exec -u` でログオンできない（0x52e）。パスワードなしならログオンできる
+- コンテナ内のユーザーはホストのユーザーとは別の SID になるため、本人と管理者だけが書き込める
+  プロジェクト（`C:\Users\<名前>\...` の下）に書き込めない（`C:\tmp` のように Authenticated Users に権限があれば書ける）
+- `C:\Users\<名前>` に永続ホームを先にマウントしておくと、Windows はそれを使わず `C:\Users\<名前>.<ホスト名>` にホームを作る
+
+### Windows 用プロファイル
+
+| 名前 | 中身 |
+|---|---|
+| base | Server Core（`BASE_TAG`）+ PowerShell 7.7 + Git for Windows 2.56（PortableGit、`C:\Git`） |
+| node | base + Node.js 26 LTS（`C:\nodejs`）。グローバルの入れ先は `C:\npm-global` |
+| python | base + Python 3.14（`C:\Python314`）+ uv。3.15 にしないのは wheel がそろっているため |
+| dotnet | base + .NET SDK 10.0（`C:\dotnet`） |
+| claude | node + Claude Code（npm）。bash は base の Git のものを使う（`CLAUDE_CODE_GIT_BASH_PATH`）。既定で永続ホームを使う |
+
+- ツールは公式の配布物（zip / インストーラー）を直接取ってくる。パッケージマネージャー（Chocolatey・winget）は使わない。
+  版とハッシュ（GitHub のリリースの digest、Node の SHASUMS256.txt、python.org の SHA-256、.NET の releases.json の SHA-512）を
+  Dockerfile に固定し、base の `fetch.ps1` で照合する。
+- PATH は `add-path.ps1` でマシンの環境変数（レジストリ）に書く。Windows コンテナでは `ENV PATH` が PATH を丸ごと置き換えるため。
+- zip の展開は `Expand-Archive` ではなく `tar.exe` を使う（大きな zip で速い）。
+- Git は PATH に `C:\Git\cmd` だけを足す（`usr\bin` を足すと `find` や `sort` が Windows のものと入れ替わる）。
+  マウントしたディレクトリの所有者はホストのユーザーなので、`safe.directory=*` をシステムの設定に入れる。
+- `.ps1` は BOM 付きの UTF-8 にする（Windows PowerShell 5.1 は BOM のないファイルをシステムの文字コードで読むため）。
+- プロンプトに `(koya:<プロファイル>)` を出す（PowerShell の全ユーザー用プロファイル）。
+
 ### コンテナ
 
 | 項目 | Linux コンテナ | Windows コンテナ |
@@ -270,8 +314,9 @@ Rancher Desktop は Windows コンテナに対応していないため、koya �
 | 常駐 | `--init` + `sleep infinity` | `powershell.exe` で `Start-Sleep` を繰り返す（`--init` はない） |
 | マウント | `/c/...` に変換 | C: はそのまま、ほかのドライブは `C:\mnt\<ドライブ>\...`（コンテナには C: しかない） |
 | ユーザー | ホストのユーザーを登録 | イメージの既定（ContainerAdministrator）。登録しない |
-| シェル | bash | `powershell.exe -NoLogo`（パイプなら `-Command -`） |
-| セッション・永続ホーム | 使える | 使えない（tmux がない。ユーザープロファイルの上にマウントできない） |
+| シェル | bash | `pwsh.exe -NoLogo`。pwsh がないイメージでは `powershell.exe`（`cmd /c` で選ぶ。パイプなら `-NoProfile -Command -`） |
+| セッション | 使える | 使えない（tmux がない） |
+| 永続ホーム | `$HOME` にマウント | `C:\Users\<ホストのユーザー名>` にマウントし、環境変数などでホームを向ける（下記） |
 | 既定のプロファイル | `.koya` → `KOYA_PROFILE` → base | `KOYA_WIN_PROFILE` → base |
 
 - `ls`・`stop`・`rm`・`profiles`・`build` も `--win` で Windows コンテナ側を扱う。
@@ -284,6 +329,9 @@ Rancher Desktop は Windows コンテナに対応していないため、koya �
 - `--group <ドメイン>\<ユーザー>` で、一般ユーザーのまま koya 専用のパイプにつなげる。`--register-service` に渡した引数がサービスに記録される
 - Rancher Desktop の dockerd と同時に動き、コンテナ内から名前解決と HTTPS の通信ができる（HNS の NAT ネットワークがぶつからない）
 - D: のディレクトリが `C:\mnt\d\...` に、C: のディレクトリが同じパスにマウントされ、読み書きできる
+- 同梱の5つ（base・node・python・dotnet・claude）のビルドが通り、python・node・dotnet・claude が動く
+- claude で永続ホームを使い、コンテナを作り直してもログインが残る（`USERPROFILE`・`APPDATA` は永続ホーム、
+  API でたずねたホームそのものは `C:\Users\ContainerAdministrator` のまま）
 
 ファイルアクセスの速さ（2026-11-17。小さなファイル 5000 個の作成・更新日時の取得・読み込み・削除。単位は秒）:
 
@@ -303,7 +351,7 @@ Rancher Desktop は Windows コンテナに対応していないため、koya �
 - 計測は PowerShell（`[IO.File]` の API）と bash（`echo >`・`find`・`cat`・`rm`）で行ったため、処理の中身は完全には揃っていない。
 
 今後:
-- Windows 用プロファイルの追加（pwsh、Git、.NET SDK、Build Tools など）。
+- Visual Studio Build Tools（MSBuild・.NET Framework）のプロファイル。
 - Hyper-V 分離への手動の切り替えオプション（`--isolation`）。
 
 ## リポジトリ構成
@@ -325,7 +373,8 @@ koya/
 │   ├── go/Dockerfile
 │   └── claude/Dockerfile
 ├── profiles-win/           同梱プロファイル（Windows コンテナ用。go:embed 対象）
-│   └── base/Dockerfile
+│   ├── base/Dockerfile, fetch.ps1, add-path.ps1, profile.ps1
+│   └── node/, python/, dotnet/, claude/
 └── docs/design.md
 ```
 
