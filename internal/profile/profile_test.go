@@ -1,6 +1,8 @@
 package profile
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -24,11 +26,11 @@ func TestParentOf(t *testing.T) {
 func TestHashChangesWithParent(t *testing.T) {
 	mk := func(base string) *Store {
 		fsys := fstest.MapFS{
-			"profiles/base/Dockerfile":  {Data: []byte(base)},
-			"profiles/child/Dockerfile": {Data: []byte("FROM localhost/koya/base\n")},
+			"profiles-linux/base/Dockerfile":  {Data: []byte(base)},
+			"profiles-linux/child/Dockerfile": {Data: []byte("FROM localhost/koya/base\n")},
 		}
 		s := NewStore(fsys)
-		s.userDir = ""
+		s.userDirs = nil
 		return s
 	}
 	h1, err := mk("FROM debian\n").Hash("child")
@@ -43,10 +45,10 @@ func TestHashChangesWithParent(t *testing.T) {
 
 func TestCycle(t *testing.T) {
 	s := NewStore(fstest.MapFS{
-		"profiles/a/Dockerfile": {Data: []byte("FROM localhost/koya/b\n")},
-		"profiles/b/Dockerfile": {Data: []byte("FROM localhost/koya/a\n")},
+		"profiles-linux/a/Dockerfile": {Data: []byte("FROM localhost/koya/b\n")},
+		"profiles-linux/b/Dockerfile": {Data: []byte("FROM localhost/koya/a\n")},
 	})
-	s.userDir = ""
+	s.userDirs = nil
 	if _, err := s.Hash("a"); err == nil {
 		t.Fatal("expected cycle error")
 	}
@@ -54,12 +56,12 @@ func TestCycle(t *testing.T) {
 
 func TestWinStore(t *testing.T) {
 	fsys := fstest.MapFS{
-		"profiles/base/Dockerfile":     {Data: []byte("FROM fedora\n")},
-		"profiles-win/base/Dockerfile": {Data: []byte("ARG BASE_TAG\nFROM mcr.microsoft.com/windows/servercore:${BASE_TAG}\n")},
-		"profiles-win/dev/Dockerfile":  {Data: []byte("FROM localhost/koya/base\n")},
+		"profiles-linux/base/Dockerfile": {Data: []byte("FROM fedora\n")},
+		"profiles-win/base/Dockerfile":   {Data: []byte("ARG BASE_TAG\nFROM mcr.microsoft.com/windows/servercore:${BASE_TAG}\n")},
+		"profiles-win/dev/Dockerfile":    {Data: []byte("FROM localhost/koya/base\n")},
 	}
 	s := NewWinStore(fsys)
-	s.userDir = ""
+	s.userDirs = nil
 	if got := strings.Join(s.Names(), ","); got != "base,dev" {
 		t.Fatalf("Names() = %s", got)
 	}
@@ -70,7 +72,7 @@ func TestWinStore(t *testing.T) {
 	s.BuildArgs = []string{"BASE_TAG=ltsc2022"}
 	h1, _ := s.Hash("dev")
 	s2 := NewWinStore(fsys)
-	s2.userDir = ""
+	s2.userDirs = nil
 	s2.BuildArgs = []string{"BASE_TAG=ltsc2025"}
 	h2, _ := s2.Hash("dev")
 	if h1 == "" || h1 == h2 {
@@ -91,5 +93,37 @@ func TestUsedBuildArgs(t *testing.T) {
 	lower := []byte("from x\n  arg OTHER\n")
 	if got := strings.Join(usedBuildArgs(lower, args), ","); got != "OTHER=1" {
 		t.Errorf("lower: %q", got)
+	}
+}
+
+func TestUserDirsLegacy(t *testing.T) {
+	cur, legacy := t.TempDir(), t.TempDir()
+	write := func(dir, name, body string) {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, "Dockerfile"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(cur, "both", "FROM localhost/koya/base\n# cur\n")
+	write(legacy, "both", "FROM localhost/koya/base\n# legacy\n")
+	write(legacy, "old", "FROM localhost/koya/base\n")
+
+	s := NewStore(fstest.MapFS{"profiles-linux/base/Dockerfile": {Data: []byte("FROM fedora\n")}})
+	s.userDirs = []string{cur, legacy}
+	if got := strings.Join(s.Names(), ","); got != "base,both,old" {
+		t.Fatalf("Names() = %s", got)
+	}
+	p, err := s.Get("both")
+	if err != nil || p.Source != User || !strings.Contains(string(p.Files["Dockerfile"]), "# cur") {
+		t.Fatalf("Get(both) must prefer the current dir: %v, %v", p, err)
+	}
+	p, err = s.Get("old")
+	if err != nil || p.Source != User || p.Path != filepath.Join(legacy, "old") {
+		t.Fatalf("Get(old) must read the legacy dir: %v, %v", p, err)
+	}
+	if s.UserDir() != cur {
+		t.Fatalf("UserDir() = %s", s.UserDir())
 	}
 }

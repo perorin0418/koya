@@ -52,11 +52,11 @@ func ImageName(name string) string { return "localhost/koya/" + name + ":latest"
 
 // Store はプロファイルの置き場所（同梱とユーザー定義）。
 type Store struct {
-	builtin fs.FS  // <dir>/<名前>/... を持つ FS
-	dir     string // builtin の中のプロファイルのディレクトリ（profiles / profiles-win）
-	userDir string
-	cache   map[string]*Profile
-	hashes  map[string]string
+	builtin  fs.FS    // <dir>/<名前>/... を持つ FS
+	dir      string   // builtin の中のプロファイルのディレクトリ（profiles-linux / profiles-win）
+	userDirs []string // ユーザー定義の置き場所。先にあるものを優先する（先頭が今の名前、後ろは旧名）
+	cache    map[string]*Profile
+	hashes   map[string]string
 
 	// ビルドのときに渡す引数（Windows コンテナのベースイメージのタグなど）。
 	// BuildArgs はハッシュにも含め、変わったら再ビルドする。
@@ -64,9 +64,10 @@ type Store struct {
 	BuildFlags []string // --isolation process など
 }
 
-// NewStore は Linux コンテナ用の Store を作る。builtin は "profiles" ディレクトリを根に持つ FS。
+// NewStore は Linux コンテナ用の Store を作る。builtin は "profiles-linux" ディレクトリを根に持つ FS。
+// ユーザー定義は設定ディレクトリの下の profiles-linux。旧名の profiles に置いたものも読む。
 func NewStore(builtin fs.FS) *Store {
-	return newStore(builtin, "profiles")
+	return newStore(builtin, "profiles-linux", "profiles")
 }
 
 // NewWinStore は Windows コンテナ用（koya run --win）の Store を作る。
@@ -75,15 +76,35 @@ func NewWinStore(builtin fs.FS) *Store {
 	return newStore(builtin, "profiles-win")
 }
 
-func newStore(builtin fs.FS, dir string) *Store {
-	return &Store{builtin: builtin, dir: dir, userDir: userDirFor(dir), cache: map[string]*Profile{}, hashes: map[string]string{}}
+// newStore は Store を作る。legacy はユーザー定義の旧名の置き場所（dir より後に探す）。
+func newStore(builtin fs.FS, dir string, legacy ...string) *Store {
+	var userDirs []string
+	for _, name := range append([]string{dir}, legacy...) {
+		if d := userDirFor(name); d != "" {
+			userDirs = append(userDirs, d)
+		}
+	}
+	return &Store{builtin: builtin, dir: dir, userDirs: userDirs, cache: map[string]*Profile{}, hashes: map[string]string{}}
 }
 
-// UserDir はユーザー定義プロファイルのディレクトリ（設定ディレクトリの下の profiles）。
-func UserDir() string { return userDirFor("profiles") }
+// UserDir はこの Store のユーザー定義プロファイルのディレクトリ（今の名前のほう）。
+func (s *Store) UserDir() string {
+	if len(s.userDirs) == 0 {
+		return ""
+	}
+	return s.userDirs[0]
+}
 
-// UserDir はこの Store のユーザー定義プロファイルのディレクトリ。
-func (s *Store) UserDir() string { return s.userDir }
+// userPath はユーザー定義プロファイル name のディレクトリを返す（なければ空）。
+func (s *Store) userPath(name string) string {
+	for _, d := range s.userDirs {
+		p := filepath.Join(d, name)
+		if _, err := os.Stat(filepath.Join(p, "Dockerfile")); err == nil {
+			return p
+		}
+	}
+	return ""
+}
 
 func userDirFor(name string) string {
 	dir := config.Dir()
@@ -103,11 +124,11 @@ func (s *Store) Names() []string {
 			}
 		}
 	}
-	if s.userDir != "" {
-		if ents, err := os.ReadDir(s.userDir); err == nil {
+	for _, d := range s.userDirs {
+		if ents, err := os.ReadDir(d); err == nil {
 			for _, e := range ents {
 				if e.IsDir() && ValidName(e.Name()) {
-					if _, err := os.Stat(filepath.Join(s.userDir, e.Name(), "Dockerfile")); err == nil {
+					if _, err := os.Stat(filepath.Join(d, e.Name(), "Dockerfile")); err == nil {
 						set[e.Name()] = true
 					}
 				}
@@ -134,8 +155,7 @@ func (s *Store) Get(name string) (*Profile, error) {
 	hasBuiltin := builtinErr == nil
 
 	var p *Profile
-	userPath := filepath.Join(s.userDir, name)
-	if _, err := os.Stat(filepath.Join(userPath, "Dockerfile")); s.userDir != "" && err == nil {
+	if userPath := s.userPath(name); userPath != "" {
 		files, err := readFiles(os.DirFS(userPath), ".")
 		if err != nil {
 			return nil, err

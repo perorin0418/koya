@@ -151,11 +151,11 @@ Claude Code の更新は `koya build claude` でイメージを作り直して�
 
 ### 自分でプロファイルを追加する
 
-`~/.config/koya/profiles/<名前>/Dockerfile` を置くとプロファイルとして使えます。
+`~/.config/koya/profiles-linux/<名前>/Dockerfile` を置くとプロファイルとして使えます（旧名の `profiles` に置いたものも読みます。両方にあれば `profiles-linux` が優先）。
 同じディレクトリのファイルはビルドコンテキストに入ります。同梱と同じ名前にすると同梱を上書きします。
 
 ```dockerfile
-# ~/.config/koya/profiles/db/Dockerfile
+# ~/.config/koya/profiles-linux/db/Dockerfile
 FROM localhost/koya/python
 RUN dnf install -y postgresql sqlite \
  && dnf clean all
@@ -183,7 +183,7 @@ Linux・macOS との違い:
 | コンテナ内の作業ディレクトリ | `C:\Users\me\src\myapp` → `/c/Users/me/src/myapp` に変換してマウントする |
 | コンテナ内のユーザー | Windows のユーザー名を Linux で使える形にしたもの（例: `taro.yamada`）、UID/GID は 1000、ホームは `/home/<名前>` |
 | 設定ファイル | `%APPDATA%\koya\config` |
-| ユーザー定義プロファイル | `%APPDATA%\koya\profiles\<名前>\Dockerfile` |
+| ユーザー定義プロファイル | `%APPDATA%\koya\profiles-linux\<名前>\Dockerfile`（旧名の `profiles` も読む） |
 | 永続ホームの既定の置き場所 | `%LOCALAPPDATA%\koya\home` |
 
 - ネットワーク上のパス（`\\server\share`）やドライブの最上位（`C:\`）では実行できません。
