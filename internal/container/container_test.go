@@ -3,6 +3,8 @@ package container
 import (
 	"strings"
 	"testing"
+
+	"github.com/perorin0418/koya/internal/runtime"
 )
 
 func TestName(t *testing.T) {
@@ -58,5 +60,36 @@ func TestSessionName(t *testing.T) {
 		if got := SessionName(c.given, c.cmd); got != c.want {
 			t.Errorf("SessionName(%q, %v) = %q, want %q", c.given, c.cmd, got, c.want)
 		}
+	}
+}
+
+func TestWinRunArgs(t *testing.T) {
+	rt := runtime.ForWindows(`C:\koya\docker.exe`, "npipe:////./pipe/koya_docker")
+	s := Spec{Profile: "base", Workdir: `D:\src\app`, Hash: "h", Isolation: "process",
+		Opts: Options{ReadOnly: true, Net: "none"}}
+	got := strings.Join(RunArgs(rt, s), " ")
+	for _, want := range []string{
+		`-v D:\src\app:C:\mnt\d\src\app:ro`,
+		`-w C:\mnt\d\src\app`,
+		"--isolation process",
+		"--network none",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("RunArgs に %q がありません: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"--user", "--userns", "HOME="} {
+		if strings.Contains(got, bad) {
+			t.Errorf("Windows コンテナの RunArgs に %q があります: %s", bad, got)
+		}
+	}
+}
+
+func TestExecArgsWindows(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	rt := runtime.ForWindows("docker.exe", "npipe:////./pipe/koya_docker")
+	got := strings.Join(ExecArgs(rt, "n", `C:\src\app`, true, WinShell(true)), " ")
+	if got != `exec -i -t -w C:\src\app n powershell.exe -NoLogo` {
+		t.Fatalf("got %s", got)
 	}
 }

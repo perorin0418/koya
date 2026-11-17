@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -48,5 +49,31 @@ func TestCycle(t *testing.T) {
 	s.userDir = ""
 	if _, err := s.Hash("a"); err == nil {
 		t.Fatal("expected cycle error")
+	}
+}
+
+func TestWinStore(t *testing.T) {
+	fsys := fstest.MapFS{
+		"profiles/base/Dockerfile":     {Data: []byte("FROM fedora\n")},
+		"profiles-win/base/Dockerfile": {Data: []byte("ARG BASE_TAG\nFROM mcr.microsoft.com/windows/servercore:${BASE_TAG}\n")},
+		"profiles-win/dev/Dockerfile":  {Data: []byte("FROM localhost/koya/base\n")},
+	}
+	s := NewWinStore(fsys)
+	s.userDir = ""
+	if got := strings.Join(s.Names(), ","); got != "base,dev" {
+		t.Fatalf("Names() = %s", got)
+	}
+	p, err := s.Get("base")
+	if err != nil || !strings.Contains(string(p.Files["Dockerfile"]), "servercore") {
+		t.Fatalf("Get(base) = %v, %v", p, err)
+	}
+	s.BuildArgs = []string{"BASE_TAG=ltsc2022"}
+	h1, _ := s.Hash("dev")
+	s2 := NewWinStore(fsys)
+	s2.userDir = ""
+	s2.BuildArgs = []string{"BASE_TAG=ltsc2025"}
+	h2, _ := s2.Hash("dev")
+	if h1 == "" || h1 == h2 {
+		t.Fatalf("hash must change with build args: %s %s", h1, h2)
 	}
 }

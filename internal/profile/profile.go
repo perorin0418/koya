@@ -51,30 +51,51 @@ func ImageName(name string) string { return "localhost/koya/" + name + ":latest"
 
 // Store はプロファイルの置き場所（同梱とユーザー定義）。
 type Store struct {
-	builtin fs.FS // profiles/<名前>/... を持つ FS
+	builtin fs.FS  // <dir>/<名前>/... を持つ FS
+	dir     string // builtin の中のプロファイルのディレクトリ（profiles / profiles-win）
 	userDir string
 	cache   map[string]*Profile
 	hashes  map[string]string
+
+	// ビルドのときに渡す引数（Windows コンテナのベースイメージのタグなど）。
+	// BuildArgs はハッシュにも含め、変わったら再ビルドする。
+	BuildArgs  []string // KEY=VAL
+	BuildFlags []string // --isolation process など
 }
 
-// NewStore は Store を作る。builtin は "profiles" ディレクトリを根に持つ FS。
+// NewStore は Linux コンテナ用の Store を作る。builtin は "profiles" ディレクトリを根に持つ FS。
 func NewStore(builtin fs.FS) *Store {
-	return &Store{builtin: builtin, userDir: UserDir(), cache: map[string]*Profile{}, hashes: map[string]string{}}
+	return newStore(builtin, "profiles")
+}
+
+// NewWinStore は Windows コンテナ用（koya run --win）の Store を作る。
+// 同梱は builtin の "profiles-win"、ユーザー定義は設定ディレクトリの下の profiles-win。
+func NewWinStore(builtin fs.FS) *Store {
+	return newStore(builtin, "profiles-win")
+}
+
+func newStore(builtin fs.FS, dir string) *Store {
+	return &Store{builtin: builtin, dir: dir, userDir: userDirFor(dir), cache: map[string]*Profile{}, hashes: map[string]string{}}
 }
 
 // UserDir はユーザー定義プロファイルのディレクトリ（設定ディレクトリの下の profiles）。
-func UserDir() string {
+func UserDir() string { return userDirFor("profiles") }
+
+// UserDir はこの Store のユーザー定義プロファイルのディレクトリ。
+func (s *Store) UserDir() string { return s.userDir }
+
+func userDirFor(name string) string {
 	dir := config.Dir()
 	if dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, "profiles")
+	return filepath.Join(dir, name)
 }
 
 // Names は使えるプロファイル名を並べて返す。
 func (s *Store) Names() []string {
 	set := map[string]bool{}
-	if ents, err := fs.ReadDir(s.builtin, "profiles"); err == nil {
+	if ents, err := fs.ReadDir(s.builtin, s.dir); err == nil {
 		for _, e := range ents {
 			if e.IsDir() && ValidName(e.Name()) {
 				set[e.Name()] = true
@@ -108,7 +129,7 @@ func (s *Store) Get(name string) (*Profile, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("プロファイル名 %q は使えません（英小文字・数字・_ . - のみ）", name)
 	}
-	_, builtinErr := fs.Stat(s.builtin, path.Join("profiles", name, "Dockerfile"))
+	_, builtinErr := fs.Stat(s.builtin, path.Join(s.dir, name, "Dockerfile"))
 	hasBuiltin := builtinErr == nil
 
 	var p *Profile
@@ -120,7 +141,7 @@ func (s *Store) Get(name string) (*Profile, error) {
 		}
 		p = &Profile{Name: name, Source: User, Path: userPath, Files: files, Overrode: hasBuiltin}
 	} else if hasBuiltin {
-		files, err := readFiles(s.builtin, path.Join("profiles", name))
+		files, err := readFiles(s.builtin, path.Join(s.dir, name))
 		if err != nil {
 			return nil, err
 		}
@@ -191,6 +212,11 @@ func (s *Store) hash(name string, visiting map[string]bool) (string, error) {
 		fmt.Fprintf(h, "%s\x00%d\x00", k, len(p.Files[k]))
 		h.Write(p.Files[k])
 	}
+	args := append([]string(nil), s.BuildArgs...)
+	sort.Strings(args)
+	for _, a := range args {
+		fmt.Fprintf(h, "arg\x00%s\x00", a)
+	}
 	if p.Parent != "" {
 		ph, err := s.hash(p.Parent, visiting)
 		if err != nil {
@@ -254,12 +280,17 @@ func (s *Store) build(rt *runtime.Runtime, p *Profile, hash string) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "koya: イメージ %s をビルドします（%s）\n", ImageName(p.Name), p.Source)
-	err = rt.Run("build",
+	args := []string{"build",
 		"-t", ImageName(p.Name),
 		"--label", "koya.managed=true",
-		"--label", "koya.profile="+p.Name,
-		"--label", "koya.hash="+hash,
-		dir)
+		"--label", "koya.profile=" + p.Name,
+		"--label", "koya.hash=" + hash,
+	}
+	for _, a := range s.BuildArgs {
+		args = append(args, "--build-arg", a)
+	}
+	args = append(args, s.BuildFlags...)
+	err = rt.Run(append(args, dir)...)
 	if err != nil {
 		return errors.New("イメージのビルドに失敗しました: " + err.Error())
 	}

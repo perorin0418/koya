@@ -32,6 +32,18 @@ var DefaultShell = []string{"sh", "-c",
 		`if [ -f /etc/koya/bashrc ] && command -v bash >/dev/null 2>&1; then exec bash --rcfile /etc/koya/bashrc -i; ` +
 		`elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec sh -i; fi`}
 
+// WinShell は Windows コンテナでシェルを起動するコマンド。
+// 標準入力が端末なら対話の PowerShell、パイプならスクリプトとして読む。
+func WinShell(tty bool) []string {
+	if tty {
+		return []string{"powershell.exe", "-NoLogo"}
+	}
+	return []string{"powershell.exe", "-NoLogo", "-NoProfile", "-Command", "-"}
+}
+
+// winKeepAlive は Windows コンテナを常駐させるコマンド（sleep infinity の代わり）。
+var winKeepAlive = []string{"-NoLogo", "-NoProfile", "-Command", "while ($true) { Start-Sleep -Seconds 3600 }"}
+
 // Options はコンテナ作成時の設定。
 type Options struct {
 	Net      string
@@ -202,10 +214,15 @@ type Spec struct {
 	Hash    string
 	Opts    Options
 	User    User
+
+	Isolation string // Windows コンテナの分離の方式（process / hyperv）。Linux コンテナでは空
 }
 
 // RunArgs は run コマンドの共通引数（イメージ名の手前まで）を返す。
 func RunArgs(rt *runtime.Runtime, s Spec) []string {
+	if rt.Windows {
+		return winRunArgs(s)
+	}
 	ctrWorkdir := ContainerPath(s.Workdir)
 	mount := s.Workdir + ":" + ctrWorkdir + mountSuffix(s.Opts.ReadOnly)
 	args := []string{
@@ -226,6 +243,42 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 	}
 	args = append(args, "-v", mount, "-w", ctrWorkdir)
 	args = append(args, userArgs(rt, s.User)...)
+	if s.Opts.Net != "" {
+		args = append(args, "--network", s.Opts.Net)
+	}
+	for _, e := range s.Opts.Env {
+		args = append(args, "-e", e)
+	}
+	for _, p := range s.Opts.Ports {
+		args = append(args, "-p", p)
+	}
+	for _, v := range s.Opts.Volumes {
+		args = append(args, "-v", v)
+	}
+	return args
+}
+
+// winRunArgs は Windows コンテナの run の共通引数。
+// ユーザーはイメージの既定（ContainerAdministrator）のまま、永続ホームは使わない。
+func winRunArgs(s Spec) []string {
+	ctrWorkdir := WinContainerPath(s.Workdir)
+	mount := s.Workdir + ":" + ctrWorkdir
+	if s.Opts.ReadOnly {
+		mount += ":ro"
+	}
+	args := []string{
+		"--label", LabelManaged + "=true",
+		"--label", LabelProfile + "=" + s.Profile,
+		"--label", LabelWorkdir + "=" + s.Workdir,
+		"--label", LabelHash + "=" + s.Hash,
+		"--label", LabelOpts + "=" + s.Opts.Key(),
+		"--hostname", "koya-" + s.Profile,
+		"-e", "KOYA_PROFILE=" + s.Profile,
+		"-v", mount, "-w", ctrWorkdir,
+	}
+	if s.Isolation != "" {
+		args = append(args, "--isolation", s.Isolation)
+	}
 	if s.Opts.Net != "" {
 		args = append(args, "--network", s.Opts.Net)
 	}
@@ -310,6 +363,9 @@ func Setup(rt *runtime.Runtime, name string, u User) error {
 
 // Create は常駐用のコンテナを作って起動し、ユーザーを登録する。
 func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
+	if rt.Windows {
+		return createWin(rt, name, s, labels)
+	}
 	args := []string{"run", "-d", "--init", "--name", name, "--entrypoint", "sleep"}
 	for _, l := range labels {
 		args = append(args, "--label", l)
@@ -326,16 +382,27 @@ func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
 	return nil
 }
 
+// createWin は Windows コンテナを作って起動する。ユーザーの登録はしない。
+func createWin(rt *runtime.Runtime, name string, s Spec, labels []string) error {
+	args := []string{"run", "-d", "--name", name, "--entrypoint", "powershell.exe"}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
+	args = append(args, winRunArgs(s)...)
+	args = append(args, profile.ImageName(s.Profile))
+	return rt.Quiet(append(args, winKeepAlive...)...)
+}
+
 // ExecArgs は exec コマンドの引数を返す。workdir はホストのパス。
-func ExecArgs(name, workdir string, tty bool, cmd []string) []string {
+func ExecArgs(rt *runtime.Runtime, name, workdir string, tty bool, cmd []string) []string {
 	args := []string{"exec", "-i"}
 	if tty {
 		args = append(args, "-t")
-		if term := os.Getenv("TERM"); term != "" {
+		if term := os.Getenv("TERM"); term != "" && !rt.Windows {
 			args = append(args, "-e", "TERM="+term)
 		}
 	}
-	args = append(args, "-w", ContainerPath(workdir), name)
+	args = append(args, "-w", containerPathFor(rt, workdir), name)
 	return append(args, cmd...)
 }
 

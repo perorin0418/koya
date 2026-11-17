@@ -189,11 +189,45 @@ Linux・macOS との違い:
   その場合は Windows Terminal を使うか、`winpty koya run` で起動してください。
 - WSL2 の中で Linux 版を使うこともできます。プロジェクトを WSL2 側（`/home/...`）に置くと、ファイルのアクセスが速くなります。
 
+### Windows コンテナ（`--win`）
+
+Windows 版の koya では、`--win` を付けると Linux コンテナの代わりに Windows コンテナ（プロセス分離）で動かせます。
+VM を挟まないので、Windows のドライブにあるファイルをネイティブに近い速さで読み書きできます。
+.NET Framework や MSBuild など、Windows のツールを隔離して使いたいときに向いています。
+
+```powershell
+cd D:\src\myapp
+koya run --win                 # Windows の base 環境（PowerShell）に入る
+koya ls --win
+koya rm -f --win base
+koya win status                # デーモンとホストの状態
+```
+
+- **koya 専用のデーモン**: Docker の公式の静的バイナリ（`dockerd.exe`、版は固定）を初めて使うときに自動で取ってきて、
+  SHA-256 を照合してから `%ProgramFiles%\koya\` に置き、Windows サービス `koya-docker` として登録します。
+  このとき管理者権限の確認（UAC）が出ます。Rancher Desktop・Docker Desktop とは別のパイプ（`\\.\pipe\koya_docker`）と
+  データの置き場所（`%ProgramData%\koya\`）を使うので、ぶつかりません。
+- **前提**: Windows の「コンテナー」機能（Pro / Enterprise / Education。Home は不可）。有効でなければ有効にする手順を表示します。
+  有効にするには管理者権限と再起動が必要です。
+- **プロファイル**: Windows 用の別系統です（同梱は `base`: Server Core + Windows PowerShell）。
+  `%APPDATA%\koya\profiles-win\<名前>\Dockerfile` で追加できます。ベースイメージのタグは、
+  ホストのビルドに合わせて koya が選び、ビルド引数 `BASE_TAG` で渡します。
+- **マウント**: Windows コンテナには C: ドライブしかないため、C: のディレクトリはそのままのパス、
+  ほかのドライブは `C:\mnt\<ドライブ>\...` にマウントします（例: `D:\src\myapp` → `C:\mnt\d\src\myapp`）。
+- **使えないもの**: `--session`・`koya attach`・永続ホーム（`--home`）。ユーザーは `ContainerAdministrator` です。
+- プロファイルを省略したときは `KOYA_WIN_PROFILE`、なければ `base` です（`.koya` は見ません）。
+- 外すときは `koya win uninstall`（イメージとコンテナは `%ProgramData%\koya\docker` に残ります）。
+
+詳しくは `koya help win` を参照。
+
 ## 環境変数
 
 | 名前 | 意味 |
 |---|---|
 | `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` など）。既定は podman → docker の順に自動検出 |
 | `KOYA_PROFILE` | 既定のプロファイル |
+| `KOYA_WIN_PROFILE` | `--win` のときの既定のプロファイル |
+| `KOYA_WIN_BASE_TAG` | `--win` のベースイメージ（servercore）のタグ。既定はホストのビルドから自動で選ぶ |
+| `KOYA_WIN_ISOLATION` | `--win` の分離の方式（`process` / `hyperv`）。既定はホストのビルドから自動で選ぶ |
 
 `koya help config` で設定ファイルの書き方を表示します。設計の詳細は [docs/design.md](docs/design.md) を参照。
