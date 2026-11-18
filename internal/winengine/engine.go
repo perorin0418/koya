@@ -175,7 +175,7 @@ func extractFile(f *zip.File, dst string) error {
 
 // Base はホストの OS のビルド番号から決めた、ベースイメージのタグと分離の方式。
 type Base struct {
-	Tag       string // mcr.microsoft.com/windows/servercore のタグ（ltsc2022 など）
+	Tag       string // mcr.microsoft.com/windows/server のタグ（ltsc2022 など）
 	Isolation string // process / hyperv
 }
 

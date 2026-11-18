@@ -38,6 +38,10 @@ const usage = `koya - カレントディレクトリをマウントした用途�
   koya ls [-a]                   このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
   koya stop [プロファイル]        停止する（省略時はこのディレクトリの全プロファイル）
   koya rm [-f] [プロファイル]     削除する（省略時はこのディレクトリの全プロファイル）
+  koya container <ls|stop|rm>    上の ls・stop・rm と同じ（koya ls は koya container ls の略）
+  koya image ls                  koya のイメージの一覧
+  koya image rm [-f] <プロファイル...|-a>   イメージを消す（次に使うときにビルドし直す）
+  koya image prune               ビルドし直して古くなったイメージを消す
   koya profiles                  使えるプロファイルの一覧
   koya build [プロファイル...]    イメージをビルドし直す（省略時は全プロファイル）
   koya self-update [--check]     koya 本体を最新版に更新する（--check は確認だけ）
@@ -48,7 +52,7 @@ const usage = `koya - カレントディレクトリをマウントした用途�
 プロファイルを省略したときは、上の階層へたどって見つかる .koya ファイル、
 環境変数 KOYA_PROFILE、base の順に決めます。
 
-run・ls・stop・rm・profiles・build は、--linux（Linux コンテナ。省略時の既定）か
+run・ls・stop・rm・container・image・profiles・build は、--linux（Linux コンテナ。省略時の既定）か
 --win（Windows コンテナ。Windows のみ。koya help win）で対象を選びます。
 
 環境変数:
@@ -119,7 +123,7 @@ Windows 版の koya でだけ使えます（WSL の中の koya からは使え�
   - Windows の「コンテナー」機能が必要です（有効でなければ、有効にする手順を表示します）。
   - プロファイルは Windows 用の別系統です（同梱: base・node・python・dotnet・claude。
     ユーザー定義: %APPDATA%\koya\profiles-win\<名前>\Dockerfile）。
-    ベースイメージ（servercore）のタグはホストのビルドに合わせて自動で選び、ビルド引数 BASE_TAG で渡します。
+    ベースイメージ（windows/server）のタグはホストのビルドに合わせて自動で選び、ビルド引数 BASE_TAG で渡します。
   - カレントディレクトリは、C: ならそのままのパス、ほかのドライブなら C:\mnt\<ドライブ>\... にマウントします。
   - ユーザーは ContainerAdministrator です。
   - --session・koya attach --win は、tmux の代わりに psmux（base に同梱）を使います。
@@ -169,6 +173,10 @@ func run(args []string) error {
 		return cmdAttach(rest)
 	case "ls", "list":
 		return cmdLs(rest)
+	case "container":
+		return cmdContainer(rest)
+	case "image":
+		return cmdImage(rest)
 	case "stop":
 		return cmdStop(rest)
 	case "rm":
@@ -191,6 +199,10 @@ func run(args []string) error {
 			fmt.Print(configUsage)
 		} else if len(rest) > 0 && rest[0] == "win" {
 			fmt.Print(winUsage)
+		} else if len(rest) > 0 && rest[0] == "container" {
+			fmt.Print(containerUsage)
+		} else if len(rest) > 0 && rest[0] == "image" {
+			fmt.Print(imageUsage)
 		} else {
 			fmt.Print(usage)
 		}

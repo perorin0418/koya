@@ -43,9 +43,13 @@ koya は起動時に、6 時間に 1 回ほど新しい版が出ていないか�
 ```
 koya run [プロファイル] [オプション] [-- コマンド...]   環境に入る / コマンドを実行する
 koya attach [プロファイル] [セッション]   セッションにつなぎ直す
-koya ls [-a]                   このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
+koya ls [-a] [--win]           このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
 koya stop [プロファイル]        停止する（省略時はこのディレクトリの全プロファイル）
 koya rm [-f] [プロファイル]     削除する（省略時はこのディレクトリの全プロファイル）
+koya container <ls|stop|rm>    上の ls・stop・rm と同じ（koya ls は koya container ls の略）
+koya image ls                  koya のイメージの一覧（--win ではベースイメージも含めて全部）
+koya image rm [-f] <プロファイル...|-a>   イメージを消す（次に使うときにビルドし直す）
+koya image prune               ビルドし直して古くなったイメージを消す
 koya profiles                  使えるプロファイルの一覧
 koya build [プロファイル...]    イメージをビルドし直す（省略時は全プロファイル）
 koya self-update [--check]     koya 本体を最新版に更新する
@@ -58,6 +62,9 @@ koya help [コマンド]
 - マウントするのはカレントディレクトリだけです（コンテナ内でも同じパス）。ホームや SSH 鍵は渡しません。
 - コンテナ内では koya を実行したユーザー（同じユーザー名・ホームのパス）で動きます。作ったファイルの所有者もホストのユーザーのままです。sudo も使えます。
 - イメージは初めて使うときに自動でビルドします。同梱の Dockerfile が更新されたら自動でビルドし直します。
+- ビルドし直すと古いイメージが名前のないまま残ります。`koya image prune` で消せます。`--win` では、今のホストで使わない
+  ベースイメージ（`mcr.microsoft.com/windows/...`）も消します（まだ使っているプロファイルがあれば残します）。
+- `koya image rm` は、そのイメージのコンテナがあると止まります。`-f` を付けるとコンテナ（全ディレクトリ）ごと消します。
 
 ### `koya run` のオプション
 
@@ -254,7 +261,7 @@ koya win status                # デーモンとホストの状態
 
   | 名前 | 中身 |
   |---|---|
-  | `base` | Server Core + PowerShell 7 + Git for Windows（`C:\Git`。bash も入る）+ psmux（セッション機能用） |
+  | `base` | Windows Server（完全版）+ PowerShell 7 + Git for Windows（`C:\Git`。bash も入る）+ psmux（セッション機能用） |
   | `node` | base + Node.js LTS、npm、corepack |
   | `python` | base + Python 3.14、pip、venv、uv |
   | `dotnet` | base + .NET SDK 10（LTS） |
@@ -282,7 +289,7 @@ koya win status                # デーモンとホストの状態
 | `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` など）。既定は podman → docker の順に自動検出 |
 | `KOYA_PROFILE` | 既定のプロファイル |
 | `KOYA_WIN_PROFILE` | `--win` のときの既定のプロファイル |
-| `KOYA_WIN_BASE_TAG` | `--win` のベースイメージ（servercore）のタグ。既定はホストのビルドから自動で選ぶ |
+| `KOYA_WIN_BASE_TAG` | `--win` のベースイメージ（windows/server）のタグ。既定はホストのビルドから自動で選ぶ |
 | `KOYA_WIN_ISOLATION` | `--win` の分離の方式（`process` / `hyperv`）。既定はホストのビルドから自動で選ぶ |
 
 `koya help config` で設定ファイルの書き方を表示します。設計の詳細は [docs/design.md](docs/design.md) を参照。

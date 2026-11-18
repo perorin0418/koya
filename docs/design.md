@@ -171,9 +171,13 @@ Linux のホストで GPU があれば、Linux コンテナの作成時に自動
 ```
 koya run [プロファイル] [オプション] [-- コマンド...]   環境に入る / コマンドを実行する
 koya attach [プロファイル] [セッション]  セッションにつなぎ直す
-koya ls [-a]                  このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
+koya ls [-a] [--win]          このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
 koya stop [プロファイル]       停止する（省略時はこのディレクトリの全プロファイル）
 koya rm [プロファイル] [-f]    削除する（省略時はこのディレクトリの全プロファイル）
+koya container <ls|stop|rm>   ls・stop・rm と同じ（ls・stop・rm は container の略）
+koya image ls                 koya のイメージの一覧
+koya image rm [-f] <プロファイル...|-a>  イメージを消す
+koya image prune              古くなったイメージを消す
 koya profiles                 使えるプロファイルの一覧
 koya build [プロファイル]      イメージをビルド/再ビルドする
 koya self-update [--check]    koya 本体を最新版に更新する
@@ -182,6 +186,13 @@ koya help [コマンド]
 ```
 
 - すべての操作はサブコマンドで指定する。引数なしの `koya` はヘルプを表示する。
+- イメージの操作（`koya image`）:
+  - 対象はラベル `koya.managed=true` のイメージ。Linux のランタイムはほかの用途と共用なので、`prune` もこのラベルで絞る。
+    Windows のデーモンは koya 専用なので、`ls` は全部を出し、`prune` は名前のないイメージを全部消す。
+  - `prune --win` は、base の Dockerfile の `FROM` にホストの `BASE_TAG` を埋めたイメージ以外の `mcr.microsoft.com/windows/...` を `rmi` する。
+    古いベースのままのプロファイルが使っているものは `rmi` が断るので、残す（`koya build --win` で作り直すと消せる）。
+  - `rm` は、そのプロファイルのコンテナ（全ディレクトリ）があれば止まる。`-f` でコンテナごと消す。
+    親のイメージは子が残っていると消せないことがあるため、消せたものがある限り残りをやり直す。
 - プロファイル名は必ずサブコマンドの後ろに来るので、プロファイル名とコマンド名がぶつかることはない。
 - `koya run` でプロファイルを省略したときの既定は、カレントディレクトリから上にたどって見つかる `.koya` ファイル（中身はプロファイル名）、
   なければ環境変数 `KOYA_PROFILE`、なければ `base`。
@@ -301,6 +312,8 @@ Rancher Desktop は Windows コンテナに対応していないため、koya �
 | 17764〜20347（Windows 10 1903 以降） | `ltsc2019` | hyperv |
 
 - `KOYA_WIN_BASE_TAG`・`KOYA_WIN_ISOLATION` で上書きできる。
+- base は完全版の `mcr.microsoft.com/windows/server` を使う（Playwright のブラウザーなど、Server Core では動かないおそれのあるツールのため）。
+  `windows/server` は ltsc2022 以降にしかないため、`ltsc2019` になるホスト（ビルド 20348 未満）では base をビルドできない。
 - タグは `--build-arg BASE_TAG=<タグ>` で Dockerfile に渡し、ビルド引数もイメージのハッシュに含める（ホストを上げたら再ビルド）。
 - `build` と `run` に `--isolation` を付ける（クライアント版 Windows の既定は hyperv のため）。
 
@@ -332,7 +345,7 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 
 | 名前 | 中身 |
 |---|---|
-| base | Server Core（`BASE_TAG`）+ PowerShell 7.7 + Git for Windows 2.56（PortableGit、`C:\Git`）+ psmux 3.4.0（`C:\psmux`） |
+| base | Windows Server 完全版（`windows/server:BASE_TAG`）+ PowerShell 7.7 + Git for Windows 2.56（PortableGit、`C:\Git`）+ psmux 3.4.0（`C:\psmux`） |
 | node | base + Node.js 26 LTS（`C:\nodejs`）。グローバルの入れ先は `C:\npm-global` |
 | python | base + Python 3.14（`C:\Python314`）+ uv。3.15 にしないのは wheel がそろっているため |
 | dotnet | base + .NET SDK 10.0（`C:\dotnet`） |
@@ -343,6 +356,8 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
   Dockerfile に固定し、base の `fetch.ps1` で照合する。
 - PATH は `add-path.ps1` でマシンの環境変数（レジストリ）に書く。Windows コンテナでは `ENV PATH` が PATH を丸ごと置き換えるため。
 - zip の展開は `Expand-Archive` ではなく `tar.exe` を使う（大きな zip で速い）。
+  展開の直後に `$LASTEXITCODE` を確かめて throw する（外部コマンドの失敗は `$ErrorActionPreference = 'Stop'` でも止まらず、
+  展開に失敗したままビルドが進むため）。
 - Git は PATH に `C:\Git\cmd` だけを足す（`usr\bin` を足すと `find` や `sort` が Windows のものと入れ替わる）。
   マウントしたディレクトリの所有者はホストのユーザーなので、`safe.directory=*` をシステムの設定に入れる。
 - `.ps1` は BOM 付きの UTF-8 にする（Windows PowerShell 5.1 は BOM のないファイルをシステムの文字コードで読むため）。
