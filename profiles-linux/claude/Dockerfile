@@ -1,5 +1,6 @@
 # koya claude: Claude Code（node プロファイル + @anthropic-ai/claude-code）
 # 設定・認証・履歴（~/.claude, ~/.claude.json）を残すため、既定で永続ホームを使う。
+# 端末が切れても Claude Code が動き続けるよう、既定でセッション（--session）を使う。
 FROM localhost/koya/node
 
 RUN npm install -g @anthropic-ai/claude-code \
@@ -13,4 +14,5 @@ RUN npm install -g @anthropic-ai/claude-code \
 ENV DISABLE_AUTOUPDATER=1 \
     IS_SANDBOX=1
 
-LABEL koya.home="true"
+LABEL koya.home="true" \
+      koya.session="true"

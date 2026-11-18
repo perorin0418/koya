@@ -193,6 +193,11 @@ koya run python
 - 手元の端末の種類（`TERM`）の定義がコンテナにないと tmux が起動しないので、そのときは `xterm-256color` にする
 - セッション名の既定はコマンド名（なければ `shell`）。tmux で使えない `.` と `:` は `-` に置き換える
 - セッションには端末が必要（`ssh` なら `-t`）。`--rm` とは同時に使えない
+- 使うかどうかは、`--session` / `--no-session`、プロファイルの `LABEL koya.session="true"`（claude プロファイルはこれで既定で有効）の順に決める。
+  ラベルで有効になる場合、使えない状況（`--rm`・端末なし）ではエラーにせず、セッションなしで動かす。
+  既存のコンテナがイメージより古いとき（`koya.hash` が違うとき）も使わない（ラベルは新しいイメージのもので、古いコンテナには
+  tmux・psmux がないことがあるため）
+- Windows コンテナでは tmux の代わりに psmux（v3.4.0。tmux と同じコマンドと設定の書き方を受け付ける）を使う。下記「Windows コンテナのセッション」
 - tmux を選んだ理由: つなぎ直したときに画面全体を描き直してくれる（dtach などは画面を復元しない）。
   画面を読んで状態を判定するツール（nagaya）とも組み合わせられる
 
@@ -299,11 +304,11 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 
 | 名前 | 中身 |
 |---|---|
-| base | Server Core（`BASE_TAG`）+ PowerShell 7.7 + Git for Windows 2.56（PortableGit、`C:\Git`） |
+| base | Server Core（`BASE_TAG`）+ PowerShell 7.7 + Git for Windows 2.56（PortableGit、`C:\Git`）+ psmux 3.4.0（`C:\psmux`） |
 | node | base + Node.js 26 LTS（`C:\nodejs`）。グローバルの入れ先は `C:\npm-global` |
 | python | base + Python 3.14（`C:\Python314`）+ uv。3.15 にしないのは wheel がそろっているため |
 | dotnet | base + .NET SDK 10.0（`C:\dotnet`） |
-| claude | node + Claude Code（npm）。bash は base の Git のものを使う（`CLAUDE_CODE_GIT_BASH_PATH`）。既定で永続ホームを使う |
+| claude | node + Claude Code（npm）。bash は base の Git のものを使う（`CLAUDE_CODE_GIT_BASH_PATH`）。既定で永続ホームとセッションを使う |
 
 - ツールは公式の配布物（zip / インストーラー）を直接取ってくる。パッケージマネージャー（Chocolatey・winget）は使わない。
   版とハッシュ（GitHub のリリースの digest、Node の SHASUMS256.txt、python.org の SHA-256、.NET の releases.json の SHA-512）を
@@ -324,13 +329,30 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 | マウント | `/c/...` に変換 | C: はそのまま、ほかのドライブは `C:\mnt\<ドライブ>\...`（コンテナには C: しかない） |
 | ユーザー | ホストのユーザーを登録 | イメージの既定（ContainerAdministrator）。登録しない |
 | シェル | bash | `pwsh.exe -NoLogo`。pwsh がないイメージでは `powershell.exe`（`cmd /c` で選ぶ。パイプなら `-NoProfile -Command -`） |
-| セッション | 使える | 使えない（tmux がない） |
+| セッション | tmux | psmux（下記） |
 | 永続ホーム | `$HOME` にマウント | `C:\Users\<ホストのユーザー名>` にマウントし、環境変数などでホームを向ける（下記） |
 | 既定のプロファイル | `.koya` → `KOYA_PROFILE` → base | `KOYA_WIN_PROFILE` → base |
 
-- `ls`・`stop`・`rm`・`profiles`・`build` も `--win` で Windows コンテナ側を扱う。
+- `ls`・`stop`・`rm`・`profiles`・`build`・`attach` も `--win` で Windows コンテナ側を扱う。
 - 対象は `--linux` / `--win` の対で選ぶ。何も付けなければ `--linux`（省略できる既定）。両方付けたらエラーにする。
 - WSL の中の Linux 版 koya からは使えない（名前付きパイプとサービスの操作が Windows のものなため）。
+
+### Windows コンテナのセッション
+
+tmux の代わりに psmux（Windows 用の tmux。ConPTY を使う）を使う。コマンドと設定の書き方が tmux と同じなので、Linux と同じ形で動かす。
+
+- base に GitHub Releases の zip（版とハッシュは Dockerfile に固定）を `C:\psmux` に展開し、PATH に足す（`tmux.exe` の名前でも呼べる）
+- 設定は base の `C:\ProgramData\koya\tmux.conf`（`-f` で渡す）。ステータス行なし、マウスでスクロール
+- `new-session -A -D -s <名前> -- <コマンド>`・`attach-session -d -t =<名前>`・`has-session`・`ls -F` を使う。
+  コマンドがなければ `pwsh.exe -NoLogo`（koya のプロンプト付き）
+- psmux はコマンドを `.exe` として直接起動するため、npm の `claude`（`claude.cmd`・`claude.ps1`）などは起動できず、
+  セッションがすぐ消える（`psmux: can't find session`）。`.exe` に見つからないコマンドは `pwsh.exe -EncodedCommand` を通して起動する
+- 処理は PowerShell 7 のスクリプトにし、名前とコマンドは単一引用符の文字列として埋め込んで `pwsh -EncodedCommand` で渡す。
+  `pwsh -File` に引数で渡すと、`-` で始まる引数や `--` が PowerShell の引数として解釈されるため
+- 実機（Windows Server 2025 ビルド 26100、base）で次を確かめた（2026-11-18、psmux 3.4.0 を手で置いた確認用のスクリプト）:
+  切り離したセッションが `koya run` の終了後も動き続ける / 端末つきでつないだ窓をプロセスごと強制終了しても動き続ける /
+  `new-session -A -D` で既存のセッションにつながる（コマンドは起動し直さない）/ `attach-session -d -t =名前` でつながる /
+  `ls -F '#{session_name}<TAB>#{session_attached}'` が tmux と同じ形で出る
 
 ### 動作確認と今後
 
