@@ -1,8 +1,11 @@
 package container
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/perorin0418/koya/internal/runtime"
 )
@@ -55,6 +58,8 @@ func TestSessionName(t *testing.T) {
 		{"", []string{"/usr/bin/claude", "--resume"}, "claude"},
 		{"my.work:1", nil, "my-work-1"},
 		{"work", []string{"claude"}, "work"},
+		{"", []string{`C:\Program Files\PowerShell\7\pwsh.exe`, "-NoLogo"}, "pwsh"},
+		{"", []string{"claude.EXE"}, "claude"},
 	}
 	for _, c := range cases {
 		if got := SessionName(c.given, c.cmd); got != c.want {
@@ -145,5 +150,66 @@ func TestWinShellFolders(t *testing.T) {
 	}
 	if got := strings.Join(cmds[1], "|"); got != `reg.exe|add|HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders|/v|Local AppData|/t|REG_EXPAND_SZ|/d|C:\Users\me\AppData\Local|/f` {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestPsQuote(t *testing.T) {
+	cases := map[string]string{
+		"":            "''",
+		"claude":      "'claude'",
+		"it's":        "'it''s'",
+		"a\u2019b":    "'a\u2019\u2019b'",
+		"$x \"y\" `z": "'$x \"y\" `z'",
+	}
+	for in, want := range cases {
+		if got := psQuote(in); got != want {
+			t.Errorf("psQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := psArray(nil); got != "@()" {
+		t.Errorf("psArray(nil) = %q", got)
+	}
+	if got := psArray([]string{"claude", "--resume"}); got != "@('claude', '--resume')" {
+		t.Errorf("psArray = %q", got)
+	}
+}
+
+// decodeWinPwsh は winPwsh のコマンドからスクリプトを取り出す。
+func decodeWinPwsh(t *testing.T, cmd []string) string {
+	t.Helper()
+	if len(cmd) != 5 || cmd[0] != "pwsh.exe" || cmd[3] != "-EncodedCommand" {
+		t.Fatalf("unexpected command: %v", cmd)
+	}
+	b, err := base64.StdEncoding.DecodeString(cmd[4])
+	if err != nil || len(b)%2 != 0 {
+		t.Fatalf("decode: %v", err)
+	}
+	u := make([]uint16, len(b)/2)
+	for i := range u {
+		u[i] = binary.LittleEndian.Uint16(b[2*i:])
+	}
+	return string(utf16.Decode(u))
+}
+
+func TestWinSessionCommand(t *testing.T) {
+	script := decodeWinPwsh(t, SessionCommand(true, "claude", []string{"claude", "--dangerously-skip-permissions", "--"}))
+	for _, want := range []string{
+		"$name = 'claude'\n",
+		"$cmd = @('claude', '--dangerously-skip-permissions', '--')\n",
+		"new-session -A -D -s $name -- @cmd",
+		"$app.Extension -eq '.exe'",
+		`C:\ProgramData\koya\tmux.conf`,
+		"セッション機能を使えません",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script に %q がない:\n%s", want, script)
+		}
+	}
+	script = decodeWinPwsh(t, AttachCommand(true, "work"))
+	if !strings.Contains(script, "$name = 'work'\n") || !strings.Contains(script, `attach-session -d -t "=$name"`) {
+		t.Errorf("attach script:\n%s", script)
+	}
+	if got := SessionCommand(false, "x", nil); got[0] != "sh" {
+		t.Errorf("linux: %v", got)
 	}
 }

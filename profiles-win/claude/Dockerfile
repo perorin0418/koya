@@ -15,6 +15,6 @@ ENV DISABLE_AUTOUPDATER=1 `
     IS_SANDBOX=1 `
     CLAUDE_CODE_GIT_BASH_PATH=C:\Git\bin\bash.exe
 
-# koya.session: Windows コンテナではセッションを使えないため無視される（Linux 版とそろえて付けている）
+# koya.session: 端末が切れても Claude Code が動き続けるよう、既定でセッション（--session。psmux）を使う
 LABEL koya.home="true" `
       koya.session="true"

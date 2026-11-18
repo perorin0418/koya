@@ -1,5 +1,5 @@
 # escape=`
-# koya base（Windows コンテナ）: Windows Server Core + PowerShell 7 + Git for Windows（bash 付き）
+# koya base（Windows コンテナ）: Windows Server Core + PowerShell 7 + Git for Windows（bash 付き）+ psmux
 # BASE_TAG は koya がホストの OS のビルドに合わせて渡す（ltsc2022 / ltsc2025 など）。
 # プロセス分離では、ホストとイメージのビルドが合っていないと起動できないため。
 # ツールの版とハッシュは固定する。版を上げるときは、公式の配布元のハッシュに書き換える。
@@ -8,8 +8,8 @@ FROM mcr.microsoft.com/windows/servercore:${BASE_TAG}
 
 SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 
-# ビルド用の補助スクリプト（子のプロファイルでも使う）とプロンプト
-COPY fetch.ps1 add-path.ps1 profile.ps1 C:/ProgramData/koya/
+# ビルド用の補助スクリプト（子のプロファイルでも使う）とプロンプト、psmux の設定
+COPY fetch.ps1 add-path.ps1 profile.ps1 tmux.conf C:/ProgramData/koya/
 
 # PowerShell 7
 RUN & C:\ProgramData\koya\fetch.ps1 `
@@ -31,6 +31,15 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
     & C:\ProgramData\koya\add-path.ps1 C:\Git\cmd; `
     # マウントしたディレクトリの所有者はホストのユーザーなので、所有者の確認（dubious ownership）を外す
     & C:\Git\cmd\git.exe config --system --add safe.directory '*'
+
+# psmux（Windows 用の tmux。セッション機能 koya run --win --session で使う。tmux.exe の名前でも呼べる）
+RUN & C:\ProgramData\koya\fetch.ps1 `
+      https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x64.zip `
+      a66b6be7c13c6fa0dc3660a267b9e34eaa91a4eb7f07fbd55a0468018bd0f721 C:\psmux.zip; `
+    New-Item -ItemType Directory -Force C:\psmux | Out-Null; `
+    tar.exe -xf C:\psmux.zip -C C:\psmux; `
+    Remove-Item C:\psmux.zip; `
+    & C:\ProgramData\koya\add-path.ps1 C:\psmux
 
 # プロンプト（Windows PowerShell と PowerShell 7 の全ユーザー用プロファイル）
 RUN Copy-Item C:\ProgramData\koya\profile.ps1 C:\Windows\System32\WindowsPowerShell\v1.0\profile.ps1; `

@@ -34,7 +34,7 @@ const usage = `koya - カレントディレクトリをマウントした用途�
 
 使い方:
   koya run [プロファイル] [オプション] [-- コマンド...]   環境に入る / コマンドを実行する
-  koya attach [プロファイル] [セッション]   セッションにつなぎ直す
+  koya attach [--win] [プロファイル] [セッション]   セッションにつなぎ直す
   koya ls [-a]                   このディレクトリのコンテナとセッションの一覧（-a で全ディレクトリ）
   koya stop [プロファイル]        停止する（省略時はこのディレクトリの全プロファイル）
   koya rm [-f] [プロファイル]     削除する（省略時はこのディレクトリの全プロファイル）
@@ -116,7 +116,8 @@ Windows 版の koya でだけ使えます（WSL の中の koya からは使え�
     ユーザー定義: %APPDATA%\koya\profiles-win\<名前>\Dockerfile）。
     ベースイメージ（servercore）のタグはホストのビルドに合わせて自動で選び、ビルド引数 BASE_TAG で渡します。
   - カレントディレクトリは、C: ならそのままのパス、ほかのドライブなら C:\mnt\<ドライブ>\... にマウントします。
-  - --session・attach は使えません。ユーザーは ContainerAdministrator です。
+  - ユーザーは ContainerAdministrator です。
+  - --session・koya attach --win は、tmux の代わりに psmux（base に同梱）を使います。
   - 永続ホーム（--home）は C:\Users\<ホストのユーザー名> にマウントし、USERPROFILE・HOME・APPDATA・
     LOCALAPPDATA とユーザーのフォルダの設定をそこに向けます。置き場所は設定の home.win.dir
     （既定 <home.linux.dir>-win、つまり %LOCALAPPDATA%\koya\home-win）。Windows の API でホームそのものをたずねるツールや、
@@ -324,11 +325,6 @@ func cmdRun(args []string) error {
 	if err := checkTarget(win, linux); err != nil {
 		return err
 	}
-	if win {
-		if session.enabled {
-			return errors.New("--win では --session を使えません")
-		}
-	}
 	prof := ""
 	switch {
 	case len(pos) == 1:
@@ -419,8 +415,13 @@ func cmdRun(args []string) error {
 	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user, Isolation: isolation}
 	tty := isTTY(os.Stdin) && isTTY(os.Stdout)
 	// セッション: --session / --no-session → プロファイルの LABEL koya.session の順に決める。
-	// ラベルで有効になる場合は、使えない状況（--rm・端末なし・--win）では黙ってセッションなしで動かす。
-	if !session.set && !noSession && !win && !rm && tty &&
+	// ラベルで有効になる場合は、使えない状況（--rm・端末なし）では黙ってセッションなしで動かす。
+	// 既存のコンテナがイメージより古いときも使わない（ラベルは新しいイメージのもので、
+	// 古いコンテナには tmux・psmux がないことがあるため）。
+	name := container.Name(prof, wd)
+	info, exists := container.Inspect(rt, name)
+	stale := exists && info.Hash != "" && info.Hash != hash
+	if !session.set && !noSession && !rm && tty && !stale &&
 		profile.ImageLabel(rt, prof, "koya.session") == "true" {
 		session.enabled = true
 	}
@@ -431,7 +432,7 @@ func cmdRun(args []string) error {
 		if !tty {
 			return errors.New("--session は端末から実行してください（ssh なら -t を付けてください）")
 		}
-		command = container.SessionCommand(container.SessionName(session.name, command), command)
+		command = container.SessionCommand(win, container.SessionName(session.name, command), command)
 	}
 	if len(command) == 0 {
 		command = container.DefaultShell
@@ -444,8 +445,6 @@ func cmdRun(args []string) error {
 		return runOneshot(rt, spec, tty, command)
 	}
 
-	name := container.Name(prof, wd)
-	info, exists := container.Inspect(rt, name)
 	if !exists {
 		fmt.Fprintf(os.Stderr, "koya: コンテナ %s を作成します\n", name)
 		if opts.Home != "" {
@@ -463,7 +462,7 @@ func cmdRun(args []string) error {
 			fmt.Fprintf(os.Stderr, "koya: 警告: 既存のコンテナは別のオプションで作られているため、今回のオプションは効きません（作成時: %s）。\n"+
 				"      反映するには koya rm -f %s で削除してから作り直してください。\n", created, prof)
 		}
-		if info.Hash != "" && info.Hash != hash {
+		if stale {
 			fmt.Fprintf(os.Stderr, "koya: イメージが更新されています。反映するには koya rm -f %s で削除してから作り直してください。\n", prof)
 		}
 		if !info.Running() {
@@ -627,7 +626,7 @@ func cmdLs(args []string) error {
 	}
 	for _, i := range infos {
 		sess := "-"
-		if i.Running() && !rt.Windows {
+		if i.Running() {
 			var names []string
 			for _, ss := range container.Sessions(rt, i.Name) {
 				n := ss.Name
@@ -916,10 +915,13 @@ func (f *sessionFlag) Set(v string) error {
 }
 
 func cmdAttach(args []string) error {
-	const help = "使い方: koya attach [プロファイル] [セッション]\n\n" +
+	const help = "使い方: koya attach [--win] [プロファイル] [セッション]\n\n" +
 		"このディレクトリのコンテナのセッションにつなぎ直します。\n" +
-		"セッションを省略したときは、セッションが1つだけならそれにつなぎます。\n"
+		"セッションを省略したときは、セッションが1つだけならそれにつなぎます。\n" +
+		"--win を付けると Windows コンテナのセッションにつなぎます。\n"
 	fs := newFlagSet("attach")
+	win := fs.Bool("win", false, "")
+	linux := fs.Bool("linux", false, "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, help)
@@ -931,11 +933,17 @@ func cmdAttach(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkTarget(*win, *linux); err != nil {
+		return err
+	}
 	prof := defaultProfile(wd)
+	if *win {
+		prof = defaultWinProfile()
+	}
 	if len(pos) >= 1 {
 		prof = pos[0]
 	}
-	rt, err := runtime.Detect()
+	rt, err := detect(*win)
 	if err != nil {
 		return err
 	}
@@ -965,7 +973,7 @@ func cmdAttach(args []string) error {
 			return fmt.Errorf("セッションが複数あります。名前を指定してください: %s", strings.Join(names, ", "))
 		}
 	}
-	return rt.Exec(container.ExecArgs(rt, name, wd, true, container.AttachCommand(sess))...)
+	return rt.Exec(container.ExecArgs(rt, name, wd, true, container.AttachCommand(rt.Windows, sess))...)
 }
 
 func cmdSelfUpdate(args []string) error {
