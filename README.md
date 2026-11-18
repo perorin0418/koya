@@ -76,6 +76,7 @@ koya help [コマンド]
 | `--no-session` | セッションを使わない（プロファイルの `LABEL koya.session="true"` で有効でも） |
 | `--home` / `--no-home` | 永続ホームを使う / 使わない（下記） |
 | `--home-scope shared\|project` | 永続ホームをプロファイルごとに共有するか、プロジェクトごとに分けるか |
+| `--gpu` / `--no-gpu` | GPU を必ず使う / 使わない（省略時は GPU があれば自動で使う。Linux のみ、下記） |
 
 ### 既定のプロファイル
 
@@ -175,6 +176,31 @@ RUN dnf install -y postgresql sqlite \
 - `$HOME` の下には何も入れないでください（ユーザーは koya が作成時に登録し、永続ホームでも隠れるため）。
 - `LABEL koya.home="true"` を付けると、そのプロファイルでは永続ホームが既定で有効になります。
 - `LABEL koya.session="true"` を付けると、そのプロファイルではセッション（`--session`）が既定で有効になります。
+
+## GPU（Linux）
+
+Linux のホストで GPU があれば、コンテナを作るときに自動で渡します。AMD の GPU（ROCm）は `/dev/kfd` と `/dev/dri` を、
+Intel などは `/dev/dri` を渡します。渡したときは「GPU（…）を渡します」と表示します。
+
+```bash
+koya run python                        # GPU があれば自動で使う
+koya run python --gpu                  # 必ず使う（見つからなければエラー）
+koya run python --no-gpu               # 使わない
+koya run python -- sudo dnf install -y rocminfo   # 確認用のツールを入れて
+koya run python -- rocminfo                        # GPU が見えているか確かめる
+```
+
+```ini
+# ~/.config/koya/config
+gpu = auto   # auto: あれば使う（既定）/ on: 必ず使う / off: 使わない
+```
+
+- 判定はコンテナを作るときだけ行います。GPU を付ける前に作ったコンテナで使うには、`koya rm -f <プロファイル>` してから作り直します。
+- ホストのユーザーがデバイスを開ける必要があります（`render`・`video` グループ。`sudo usermod -aG render,video $USER` のあと、ログインし直す）。
+  開けないときは、自動判定では GPU を使わずに作ります（`--gpu` なら警告を出して渡します）。
+- SELinux が有効なホスト（Fedora など）でもデバイスを開けるように、GPU を使うコンテナではラベルによる隔離（`label=disable`）を外します。
+- ROCm のライブラリはイメージに入っていません。PyTorch の ROCm 版（`pip install torch --index-url https://download.pytorch.org/whl/rocm6.4` など）は自前で持っているのでそのまま動きます。
+- コンシューマー向けの GPU で ROCm が対応していないと言われる場合は、`-e HSA_OVERRIDE_GFX_VERSION=11.0.0` のように指定します（値は GPU の世代に合わせる）。
 
 ## Windows
 

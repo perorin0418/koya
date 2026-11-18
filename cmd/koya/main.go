@@ -71,6 +71,9 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
   --home           永続ホームを使う（ホストのディレクトリをホームにマウントする）
   --no-home        永続ホームを使わない（設定やプロファイルで有効でも）
   --home-scope S   永続ホームの単位: shared（プロファイルごと）/ project（プロジェクトごと）
+  --gpu            GPU を必ず使う（見つからなければエラー）
+  --no-gpu         GPU を使わない
+                   どちらもなければ、GPU（/dev/kfd、/dev/dri）があれば自動で使う（Linux のみ）
 
 そのほかのオプション:
   --session[=名前] セッションの中で動かす。端末が切れても動き続け、同じコマンドか
@@ -96,9 +99,11 @@ const configUsage = `設定ファイル: ~/.config/koya/config（$XDG_CONFIG_HOM
   home.enable = claude, python        既定で永続ホームを使うプロファイル（all で全部）
   home.scope  = shared                shared: プロファイルごとに1つ（全プロジェクトで共有）
                                       project: プロジェクトごとに分ける
+  gpu         = auto                  auto: GPU があれば使う（既定）/ on: 必ず使う / off: 使わない
 
 永続ホームを使うかどうかは、--home / --no-home、home.enable、
 プロファイルの LABEL koya.home="true" の順に決まります。
+GPU を使うかどうかは、--gpu / --no-gpu、gpu の順に決まります（Linux のホストの Linux コンテナのみ）。
 `
 
 const winUsage = `使い方: koya run --win [プロファイル] [オプション] [-- コマンド...]
@@ -275,7 +280,7 @@ func cmdRun(args []string) error {
 	fs := newFlagSet("run")
 	var opts container.Options
 	var env, ports, vols multiFlag
-	var rm, home, noHome, noSession, win, linux bool
+	var rm, home, noHome, noSession, win, linux, gpu, noGPU bool
 	var homeScope string
 	fs.StringVar(&opts.Net, "net", "", "")
 	fs.BoolVar(&opts.ReadOnly, "ro", false, "")
@@ -286,6 +291,8 @@ func cmdRun(args []string) error {
 	fs.BoolVar(&home, "home", false, "")
 	fs.BoolVar(&noHome, "no-home", false, "")
 	fs.StringVar(&homeScope, "home-scope", "", "")
+	fs.BoolVar(&gpu, "gpu", false, "")
+	fs.BoolVar(&noGPU, "no-gpu", false, "")
 	fs.BoolVar(&win, "win", false, "")
 	fs.BoolVar(&linux, "linux", false, "")
 	var session sessionFlag
@@ -303,6 +310,12 @@ func cmdRun(args []string) error {
 	}
 	if home && noHome {
 		return errors.New("--home と --no-home は同時に指定できません")
+	}
+	if gpu && noGPU {
+		return errors.New("--gpu と --no-gpu は同時に指定できません")
+	}
+	if gpu && win {
+		return errors.New("--gpu は --win（Windows コンテナ）では使えません")
 	}
 	if homeScope != "" && homeScope != "shared" && homeScope != "project" {
 		return errors.New("--home-scope は shared か project です")
@@ -412,14 +425,36 @@ func cmdRun(args []string) error {
 		opts.Home = dir
 	}
 
-	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user, Isolation: isolation}
+	name := container.Name(prof, wd)
+	info, exists := container.Inspect(rt, name)
+
+	// GPU: --gpu / --no-gpu → 設定ファイルの gpu（auto / on / off）の順に決める。
+	// デバイスはコンテナを作るときだけ探す。既存のコンテナは作成時の設定に従う
+	gpuMode := cfg.GPU
+	if gpu {
+		gpuMode = "on"
+	} else if noGPU || win {
+		gpuMode = "off"
+	}
+	var gpuDev *container.GPU
+	if exists && !rm {
+		opts.GPU = gpuMode == "on" || (gpuMode == "auto" && container.GPUOf(info.Opts))
+	} else if gpuMode != "off" {
+		if gpuDev, err = detectGPU(gpuMode); err != nil {
+			return err
+		}
+		opts.GPU = gpuDev != nil
+		if gpuDev != nil {
+			fmt.Fprintf(os.Stderr, "koya: GPU（%s）を渡します\n", strings.Join(gpuDev.Devices, ", "))
+		}
+	}
+
+	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user, GPU: gpuDev, Isolation: isolation}
 	tty := isTTY(os.Stdin) && isTTY(os.Stdout)
 	// セッション: --session / --no-session → プロファイルの LABEL koya.session の順に決める。
 	// ラベルで有効になる場合は、使えない状況（--rm・端末なし）では黙ってセッションなしで動かす。
 	// 既存のコンテナがイメージより古いときも使わない（ラベルは新しいイメージのもので、
 	// 古いコンテナには tmux・psmux がないことがあるため）。
-	name := container.Name(prof, wd)
-	info, exists := container.Inspect(rt, name)
 	stale := exists && info.Hash != "" && info.Hash != hash
 	if !session.set && !noSession && !rm && tty && !stale &&
 		profile.ImageLabel(rt, prof, "koya.session") == "true" {
@@ -454,7 +489,8 @@ func cmdRun(args []string) error {
 			return err
 		}
 	} else {
-		if (optsGiven && info.Opts != opts.Key()) || container.HomeOf(info.Opts) != opts.Home {
+		if (optsGiven && info.Opts != opts.Key()) || container.HomeOf(info.Opts) != opts.Home ||
+			container.GPUOf(info.Opts) != opts.GPU {
 			created := info.Opts
 			if created == "" {
 				created = "オプションなし"
@@ -472,6 +508,26 @@ func cmdRun(args []string) error {
 		}
 	}
 	return rt.Exec(container.ExecArgs(rt, name, wd, tty, command)...)
+}
+
+// detectGPU は GPU のデバイスを探す。mode は auto か on。
+// auto では、GPU がない・今のユーザーで開けないときは nil を返す（エラーにしない）。
+func detectGPU(mode string) (*container.GPU, error) {
+	g, err := container.DetectGPU()
+	switch {
+	case err != nil && mode == "on":
+		return nil, err
+	case err != nil:
+		return nil, nil
+	case len(g.Denied) > 0 && mode == "auto":
+		fmt.Fprintf(os.Stderr, "koya: GPU がありますが、今のユーザーでは %s を開けないため使いません"+
+			"（render・video グループに入るか、--gpu で強制できます）\n", strings.Join(g.Denied, ", "))
+		return nil, nil
+	case len(g.Denied) > 0:
+		fmt.Fprintf(os.Stderr, "koya: 警告: 今のユーザーでは %s を開けません。コンテナ内でも GPU を使えない可能性があります"+
+			"（sudo usermod -aG render,video $USER でグループに入り、ログインし直してください）\n", strings.Join(g.Denied, ", "))
+	}
+	return g, nil
 }
 
 // runOneshot は使い捨てのコンテナを作ってコマンドを実行し、終わったら削除する。

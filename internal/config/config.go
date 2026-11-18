@@ -6,6 +6,7 @@
 //	home.win.dir   = C:\koya\home-win      # 永続ホームの置き場所（Windows コンテナ用。既定は <home.linux.dir>-win）
 //	home.enable = claude, python        # 既定で永続ホームを使うプロファイル（all で全部）
 //	home.scope  = shared                # shared（プロファイルごと）/ project（プロジェクトごと）
+//	gpu         = auto                  # auto（あれば使う）/ on（必ず使う）/ off（使わない）
 package config
 
 import (
@@ -23,6 +24,7 @@ type Config struct {
 	WinHomeDir string   // 永続ホームの置き場所（Windows コンテナ用）。空なら HomeDir + "-win"
 	HomeEnable []string // 既定で永続ホームを使うプロファイル
 	HomeScope  string   // shared / project
+	GPU        string   // auto / on / off
 	Path       string   // 読み込んだファイル（なければ空）
 }
 
@@ -62,7 +64,7 @@ func DefaultHomeDir() string {
 
 // Load は設定ファイルを読む。ファイルがなければ既定値を返す。
 func Load() (*Config, error) {
-	c := &Config{HomeDir: DefaultHomeDir(), HomeScope: "shared"}
+	c := &Config{HomeDir: DefaultHomeDir(), HomeScope: "shared", GPU: "auto"}
 	path := filepath.Join(Dir(), "config")
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -110,6 +112,11 @@ func Load() (*Config, error) {
 				return nil, fmt.Errorf("%s:%d: home.scope は shared か project です", path, n)
 			}
 			c.HomeScope = v
+		case "gpu":
+			if v != "auto" && v != "on" && v != "off" {
+				return nil, fmt.Errorf("%s:%d: gpu は auto・on・off のどれかです", path, n)
+			}
+			c.GPU = v
 		default:
 			return nil, fmt.Errorf("%s:%d: 不明なキー %q", path, n, k)
 		}

@@ -93,10 +93,37 @@ home.linux.dir = /mnt/pool/koya-home   # 永続ホームの置き場所（Linux 
 home.win.dir   = C:\koya\home-win      # 永続ホームの置き場所（Windows コンテナ用。既定は <home.linux.dir>-win）
 home.enable = claude, python        # 既定で永続ホームを使うプロファイル（all で全部）
 home.scope  = shared                # shared / project
+gpu         = auto                  # auto（あれば使う）/ on（必ず使う）/ off（使わない）
 ```
 
 - 置き場所のキーは Linux 用と Windows 用で対にする（`home.linux.dir` / `home.win.dir`）。
   旧名の `home.dir` は `home.linux.dir` と同じ意味で読む（既存の設定ファイルを壊さないため）。両方書いたらエラーにする。
+
+## GPU
+
+Linux のホストで GPU があれば、Linux コンテナの作成時に自動で渡す（`--win` では使わない）。
+
+- 使うかどうかは、`--gpu`（on）/ `--no-gpu`（off）、設定ファイルの `gpu`（既定 `auto`）の順に決める。
+  - `auto`: デバイスがあり、ホストのユーザーが開けるときだけ使う。なければ黙って使わない
+    （開けないときは、使わない旨を1行出す）。Linux 以外では常に使わない。
+  - `on`: 必ず使う。デバイスがなければエラー、開けなければ警告を出して渡す。
+  - `off`: 使わない。
+- 既存のコンテナは作成時の設定（ラベル `koya.opts` の `gpu`）に従う。`auto` では違っても警告しない
+  （GPU を付ける前に作ったコンテナで毎回警告が出ないように）。`on` / `off` と違う場合は作り直すよう警告する。
+
+- 渡すデバイス: `/dev/kfd`（AMD の ROCm 用。あれば）と `/dev/dri`（描画・VA-API・ROCm 共通。`renderD*` があるときだけ）。
+- デバイスを開くには、その所有グループ（`render`・`video`）に入っている必要がある。ランタイムごとの扱い:
+
+| ランタイム | 追加する引数 |
+|---|---|
+| podman CLI（rootless） | `--group-add keep-groups`（ホストのユーザーの補助グループを引き継ぐ。ユーザー名前空間の中ではホストの GID を指定できないため。crun が必要） |
+| docker CLI で rootless のランタイム | なし（補助グループはそのまま引き継がれる） |
+| rootful docker / podman | `--group-add <デバイスの所有 GID>` |
+
+- SELinux が有効なホスト（Fedora など）ではコンテナからデバイスを開けないため、GPU を使うコンテナだけ
+  `--security-opt label=disable` でラベルによる隔離を外す。
+- デバイスの検出はコンテナ作成時だけ行う。ランタイムが別のマシンにある場合は、koya を動かすマシンの `/dev` を見るので使えない。
+- ROCm のライブラリはイメージに入れない（PyTorch の ROCm 版などは自前で持っているため）。必要ならコンテナ内で `sudo dnf install rocminfo` などで入れる。
 
 ## プロファイル（同梱イメージ）
 
@@ -134,6 +161,7 @@ home.scope  = shared                # shared / project
 | `-v src:dst` | 追加のマウント |
 | `--home` / `--no-home` | 永続ホームを使う / 使わない |
 | `--home-scope shared\|project` | 永続ホームの単位 |
+| `--gpu` / `--no-gpu` | GPU を必ず使う / 使わない（省略時は自動判定。Linux のみ） |
 
 これらはコンテナ作成時にだけ効く。既存のコンテナと違うオプションを指定した場合は、
 警告を出して `koya rm` で作り直すよう促す（作成時の設定はラベル `koya.opts` に記録して比較する）。

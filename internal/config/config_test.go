@@ -13,7 +13,7 @@ func TestLoad(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "koya"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	conf := "# comment\nhome.dir = ~/koya-home  # trailing\nhome.enable = claude, python\nhome.scope = project\n"
+	conf := "# comment\nhome.dir = ~/koya-home  # trailing\nhome.enable = claude, python\nhome.scope = project\ngpu = off\n"
 	if err := os.WriteFile(filepath.Join(dir, "koya", "config"), []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -27,13 +27,16 @@ func TestLoad(t *testing.T) {
 	if !c.HomeEnabled("python") || c.HomeEnabled("go") {
 		t.Fatalf("unexpected enable: %v", c.HomeEnable)
 	}
+	if c.GPU != "off" {
+		t.Fatalf("unexpected gpu: %q", c.GPU)
+	}
 }
 
 func TestLoadMissingAndInvalid(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	c, err := Load()
-	if err != nil || c.HomeScope != "shared" || c.Path != "" {
+	if err != nil || c.HomeScope != "shared" || c.GPU != "auto" || c.Path != "" {
 		t.Fatalf("missing file must give defaults: %+v %v", c, err)
 	}
 	os.MkdirAll(filepath.Join(dir, "koya"), 0o755)
