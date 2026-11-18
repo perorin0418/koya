@@ -14,3 +14,8 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
 
 ENV DOTNET_ROOT=C:\dotnet `
     DOTNET_NOLOGO=1
+
+# 消えても困らないキャッシュは、永続ホーム（バインドマウント）ではなくコンテナの中に置く。
+# Windows コンテナのマウントの上では、一時ディレクトリの rename に失敗することがある（uv で確認）。
+ENV NUGET_PACKAGES=C:\cache\nuget\packages `
+    NUGET_HTTP_CACHE_PATH=C:\cache\nuget\http-cache

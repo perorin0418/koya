@@ -21,3 +21,9 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
     & C:\ProgramData\koya\add-path.ps1 C:\uv
 
 ENV PYTHONUTF8=1
+
+# 消えても困らないキャッシュは、永続ホーム（バインドマウント）ではなくコンテナの中に置く。
+# Windows コンテナのマウントの上では、uv がキャッシュの一時ディレクトリを rename できずに失敗する（os error 3）。
+ENV UV_CACHE_DIR=C:\cache\uv `
+    PIP_CACHE_DIR=C:\cache\pip `
+    PLAYWRIGHT_BROWSERS_PATH=C:\cache\ms-playwright

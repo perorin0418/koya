@@ -334,6 +334,12 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 - 入れ子のマウントでは、途中のディレクトリ（`C:\Users\<名前>\src` など）が作られず、lstat すると「存在しない」になる
   （Linux の Docker は作る）。Node の `fs.realpathSync` が失敗し、Claude Code が作業ディレクトリを開けない。
   そのため、作業ディレクトリが永続ホームの下にあるときは、永続ホームの中にマウント先のディレクトリを空で作っておく
+- マウントの上では、一時ディレクトリの rename に失敗することがある。uv はキャッシュの一時ディレクトリ
+  （`uv\cache\.tmpXXXX`）を `archive-v0\<ID>` に rename するところで os error 3（ERROR_PATH_NOT_FOUND）になった（2026-11-18）。
+  同梱の Windows 用プロファイルでは、消えても困らないキャッシュを環境変数でコンテナの中の `C:\cache` に移す
+  （python: `UV_CACHE_DIR`・`PIP_CACHE_DIR`、node: `npm_config_cache`、dotnet: `NUGET_PACKAGES`・`NUGET_HTTP_CACHE_PATH`、
+  python と node: `PLAYWRIGHT_BROWSERS_PATH`）。ログインや設定は永続ホームに残す。
+  作業ディレクトリの中にできるもの（`.venv`・`node_modules` など）は移せない
 
 ホストと同じ名前のユーザーをコンテナ内に作って動かす案（`net user /add` + `exec -u`）は、実機で試して採らなかった（2026-11-17）:
 - パスワード付きのユーザーは `exec -u` でログオンできない（0x52e）。パスワードなしならログオンできる

@@ -14,3 +14,8 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
 
 # グローバルインストール先（Windows では prefix の直下にコマンドが置かれる）
 ENV NPM_CONFIG_PREFIX=C:\npm-global
+
+# 消えても困らないキャッシュは、永続ホーム（バインドマウント）ではなくコンテナの中に置く。
+# Windows コンテナのマウントの上では、一時ディレクトリの rename に失敗することがある（uv で確認）。
+ENV npm_config_cache=C:\cache\npm `
+    PLAYWRIGHT_BROWSERS_PATH=C:\cache\ms-playwright
