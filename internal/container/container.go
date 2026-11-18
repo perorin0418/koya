@@ -55,6 +55,7 @@ type Options struct {
 	Ports    []string
 	Volumes  []string
 	Home     string // 永続ホームとしてマウントするホストのディレクトリ（空なら使わない）
+	GPU      bool   // GPU を使えるようにする（Linux コンテナのみ）
 }
 
 // Key は設定を比較用の文字列にする（ラベル koya.opts に入れる）。
@@ -78,6 +79,9 @@ func (o Options) Key() string {
 	add("v", o.Volumes)
 	if o.Home != "" {
 		parts = append(parts, "home="+o.Home)
+	}
+	if o.GPU {
+		parts = append(parts, "gpu")
 	}
 	return strings.Join(parts, ";")
 }
@@ -202,6 +206,16 @@ func HomeOf(key string) string {
 	return ""
 }
 
+// GPUOf は Key() の文字列から GPU を使うかを取り出す。
+func GPUOf(key string) bool {
+	for _, p := range strings.Split(key, ";") {
+		if p == "gpu" {
+			return true
+		}
+	}
+	return false
+}
+
 // User はコンテナ内で使うユーザー（koya を実行したホストのユーザー）。
 type User struct {
 	Name string
@@ -217,6 +231,7 @@ type Spec struct {
 	Hash    string
 	Opts    Options
 	User    User
+	GPU     *GPU // Opts.GPU のときに渡すデバイス（DetectGPU で探す）
 
 	Isolation string // Windows コンテナの分離の方式（process / hyperv）。Linux コンテナでは空
 }
@@ -257,6 +272,9 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 	}
 	for _, v := range s.Opts.Volumes {
 		args = append(args, "-v", v)
+	}
+	if s.Opts.GPU {
+		args = append(args, gpuArgs(rt, s.User, s.GPU)...)
 	}
 	return args
 }
