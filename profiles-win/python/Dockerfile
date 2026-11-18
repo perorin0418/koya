@@ -16,6 +16,7 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
       529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8 C:\uv.zip; `
     New-Item -ItemType Directory -Force C:\uv | Out-Null; `
     tar.exe -xf C:\uv.zip -C C:\uv; `
+    if ($LASTEXITCODE -ne 0) { throw ('tar uv: exit ' + $LASTEXITCODE) }; `
     Remove-Item C:\uv.zip; `
     & C:\ProgramData\koya\add-path.ps1 C:\uv
 

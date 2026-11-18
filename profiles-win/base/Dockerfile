@@ -17,6 +17,7 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
       7c74e03b20a75b59715847439d046a6214b1863ee79b187872980f139bb4a05f C:\pwsh.zip; `
     New-Item -ItemType Directory -Force 'C:\Program Files\PowerShell\7' | Out-Null; `
     tar.exe -xf C:\pwsh.zip -C 'C:\Program Files\PowerShell\7'; `
+    if ($LASTEXITCODE -ne 0) { throw ('tar pwsh: exit ' + $LASTEXITCODE) }; `
     Remove-Item C:\pwsh.zip; `
     & C:\ProgramData\koya\add-path.ps1 'C:\Program Files\PowerShell\7'
 
@@ -38,6 +39,7 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
       a66b6be7c13c6fa0dc3660a267b9e34eaa91a4eb7f07fbd55a0468018bd0f721 C:\psmux.zip; `
     New-Item -ItemType Directory -Force C:\psmux | Out-Null; `
     tar.exe -xf C:\psmux.zip -C C:\psmux; `
+    if ($LASTEXITCODE -ne 0) { throw ('tar psmux: exit ' + $LASTEXITCODE) }; `
     Remove-Item C:\psmux.zip; `
     & C:\ProgramData\koya\add-path.ps1 C:\psmux
 

@@ -343,6 +343,8 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
   Dockerfile に固定し、base の `fetch.ps1` で照合する。
 - PATH は `add-path.ps1` でマシンの環境変数（レジストリ）に書く。Windows コンテナでは `ENV PATH` が PATH を丸ごと置き換えるため。
 - zip の展開は `Expand-Archive` ではなく `tar.exe` を使う（大きな zip で速い）。
+  展開の直後に `$LASTEXITCODE` を確かめて throw する（外部コマンドの失敗は `$ErrorActionPreference = 'Stop'` でも止まらず、
+  展開に失敗したままビルドが進むため）。
 - Git は PATH に `C:\Git\cmd` だけを足す（`usr\bin` を足すと `find` や `sort` が Windows のものと入れ替わる）。
   マウントしたディレクトリの所有者はホストのユーザーなので、`safe.directory=*` をシステムの設定に入れる。
 - `.ps1` は BOM 付きの UTF-8 にする（Windows PowerShell 5.1 は BOM のないファイルをシステムの文字コードで読むため）。

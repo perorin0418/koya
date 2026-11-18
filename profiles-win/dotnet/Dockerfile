@@ -8,6 +8,7 @@ RUN & C:\ProgramData\koya\fetch.ps1 `
       C:\dotnet.zip; `
     New-Item -ItemType Directory -Force C:\dotnet | Out-Null; `
     tar.exe -xf C:\dotnet.zip -C C:\dotnet; `
+    if ($LASTEXITCODE -ne 0) { throw ('tar dotnet: exit ' + $LASTEXITCODE) }; `
     Remove-Item C:\dotnet.zip; `
     & C:\ProgramData\koya\add-path.ps1 C:\dotnet
 
