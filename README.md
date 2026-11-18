@@ -275,6 +275,9 @@ koya win status                # デーモンとホストの状態
   ユーザーのフォルダの設定（AppData・ドキュメント）をそこに向けます。置き場所は Linux 用と分けて、設定の `home.win.dir`
   （既定は `<home.linux.dir>-win`、つまり `%LOCALAPPDATA%\koya\home-win`）。Windows の API でホームそのものをたずねるツールや、
   レジストリ（HKCU）に書かれる設定は残りません（Claude Code・git・npm・pip・uv は環境変数を見るので残ります）。
+  マウントの上では一時ディレクトリの rename に失敗することがあるため（uv で確認）、同梱のプロファイルでは
+  npm・pip・uv・NuGet のキャッシュと Playwright のブラウザーを、永続ホームではなくコンテナの中の `C:\cache` に置きます
+  （コンテナを作り直すと消えます）。自分で追加するプロファイルでも、キャッシュは同じように逃がしてください。
 - **セッション（`--session`・`koya attach --win`）**: tmux の代わりに psmux を使います（上の「セッション」を参照）。
 - ユーザーは `ContainerAdministrator` です。
 - プロファイルを省略したときは `KOYA_WIN_PROFILE`、なければ `base` です（`.koya` は見ません）。
