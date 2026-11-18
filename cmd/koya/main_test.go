@@ -19,6 +19,9 @@ func TestWindowsUser(t *testing.T) {
 
 func TestSessionFlag(t *testing.T) {
 	var f sessionFlag
+	if f.set {
+		t.Fatalf("未指定: %+v", f)
+	}
 	f.Set("true")
 	if !f.enabled || f.name != "" {
 		t.Fatalf("--session: %+v", f)
@@ -28,7 +31,7 @@ func TestSessionFlag(t *testing.T) {
 		t.Fatalf("--session=work: %+v", f)
 	}
 	f.Set("false")
-	if f.enabled {
+	if f.enabled || !f.set {
 		t.Fatalf("--session=false: %+v", f)
 	}
 }

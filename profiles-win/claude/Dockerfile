@@ -15,4 +15,6 @@ ENV DISABLE_AUTOUPDATER=1 `
     IS_SANDBOX=1 `
     CLAUDE_CODE_GIT_BASH_PATH=C:\Git\bin\bash.exe
 
-LABEL koya.home="true"
+# koya.session: Windows コンテナではセッションを使えないため無視される（Linux 版とそろえて付けている）
+LABEL koya.home="true" `
+      koya.session="true"

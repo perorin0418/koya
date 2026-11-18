@@ -74,7 +74,9 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
 
 そのほかのオプション:
   --session[=名前] セッションの中で動かす。端末が切れても動き続け、同じコマンドか
-                   koya attach でつなぎ直せる（名前の既定はコマンド名、なければ shell）
+                   koya attach でつなぎ直せる（名前の既定はコマンド名、なければ shell）。
+                   プロファイルに LABEL koya.session="true" があれば、付けなくても有効
+  --no-session     セッションを使わない（プロファイルで有効でも）
   --rm             使い捨て: 新しいコンテナで実行し、終了したら削除する
   --linux          Linux コンテナで動かす（既定）
   --win            Windows コンテナで動かす（Windows のみ。koya help win）
@@ -272,7 +274,7 @@ func cmdRun(args []string) error {
 	fs := newFlagSet("run")
 	var opts container.Options
 	var env, ports, vols multiFlag
-	var rm, home, noHome, win, linux bool
+	var rm, home, noHome, noSession, win, linux bool
 	var homeScope string
 	fs.StringVar(&opts.Net, "net", "", "")
 	fs.BoolVar(&opts.ReadOnly, "ro", false, "")
@@ -287,12 +289,16 @@ func cmdRun(args []string) error {
 	fs.BoolVar(&linux, "linux", false, "")
 	var session sessionFlag
 	fs.Var(&session, "session", "")
+	fs.BoolVar(&noSession, "no-session", false, "")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return flagErr(err, runUsage)
 	}
 	if len(pos) > 1 {
 		return fmt.Errorf("プロファイルは1つだけ指定できます（コマンドは -- の後ろに書きます）: %s", strings.Join(pos, " "))
+	}
+	if session.enabled && noSession {
+		return errors.New("--session と --no-session は同時に指定できません")
 	}
 	if home && noHome {
 		return errors.New("--home と --no-home は同時に指定できません")
@@ -303,7 +309,7 @@ func cmdRun(args []string) error {
 	opts.Env, opts.Ports, opts.Volumes = env, ports, vols
 	optsGiven := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name != "rm" && f.Name != "session" && f.Name != "win" && f.Name != "linux" {
+		if f.Name != "rm" && f.Name != "session" && f.Name != "no-session" && f.Name != "win" && f.Name != "linux" {
 			optsGiven = true
 		}
 	})
@@ -412,6 +418,12 @@ func cmdRun(args []string) error {
 
 	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user, Isolation: isolation}
 	tty := isTTY(os.Stdin) && isTTY(os.Stdout)
+	// セッション: --session / --no-session → プロファイルの LABEL koya.session の順に決める。
+	// ラベルで有効になる場合は、使えない状況（--rm・端末なし・--win）では黙ってセッションなしで動かす。
+	if !session.set && !noSession && !win && !rm && tty &&
+		profile.ImageLabel(rt, prof, "koya.session") == "true" {
+		session.enabled = true
+	}
 	if session.enabled {
 		if rm {
 			return errors.New("--session と --rm は同時に指定できません")
@@ -881,14 +893,17 @@ func windowsUser(username string) container.User {
 }
 
 // sessionFlag は --session（名前なし）と --session=名前 の両方を受け付けるフラグ。
+// set は --session / --session=… がコマンドラインで指定されたかどうか（--session=false を含む）。
 type sessionFlag struct {
 	enabled bool
 	name    string
+	set     bool
 }
 
 func (f *sessionFlag) String() string   { return f.name }
 func (f *sessionFlag) IsBoolFlag() bool { return true }
 func (f *sessionFlag) Set(v string) error {
+	f.set = true
 	switch v {
 	case "true":
 		f.enabled, f.name = true, ""

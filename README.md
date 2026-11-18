@@ -73,6 +73,7 @@ koya help [コマンド]
 | `--rm` | 使い捨て: 新しいコンテナで実行し、終了したら削除する |
 | `--linux` / `--win` | Linux コンテナ（既定）/ Windows コンテナで動かす（下記） |
 | `--session[=名前]` | セッションの中で動かす（下記）。これはコンテナ作成時に限らず毎回効く |
+| `--no-session` | セッションを使わない（プロファイルの `LABEL koya.session="true"` で有効でも） |
 | `--home` / `--no-home` | 永続ホームを使う / 使わない（下記） |
 | `--home-scope shared\|project` | 永続ホームをプロファイルごとに共有するか、プロジェクトごとに分けるか |
 
@@ -92,7 +93,7 @@ koya help [コマンド]
 | `python` | base + python3, pip, venv, uv, gcc |
 | `node` | base + Node.js LTS, npm, corepack |
 | `go` | base + Go 最新安定版, gcc |
-| `claude` | node + Claude Code（永続ホームが既定で有効） |
+| `claude` | node + Claude Code（永続ホームとセッションが既定で有効） |
 
 ## セッション
 
@@ -108,6 +109,8 @@ koya attach claude                     # またはこれでつなぎ直す
 koya ls                                # SESSIONS の列にセッションが出る（* はつながっている）
 ```
 
+- プロファイルに `LABEL koya.session="true"` があると、`--session` を付けなくてもセッションで動きます（同梱の `claude` プロファイルは有効）。
+  使わないときは `--no-session` を付けます。ラベルで有効な場合、`--rm` や端末がないとき（パイプ・`ssh` で `-t` なし）は、セッションなしで動きます
 - セッション名の既定はコマンド名（`claude` など）、コマンドがなければ `shell` です。`--session=work` で名前を付けられます
 - 同じセッションにつなぐと、ほかの端末からの接続は切り離されます（1つのセッションを見られるのは1か所だけ）
 - tmux のステータス行は出さず、ホイールでスクロールできる設定にしています（文字の選択は Shift を押しながら）。
@@ -169,6 +172,7 @@ RUN dnf install -y postgresql sqlite \
 
 - `$HOME` の下には何も入れないでください（ユーザーは koya が作成時に登録し、永続ホームでも隠れるため）。
 - `LABEL koya.home="true"` を付けると、そのプロファイルでは永続ホームが既定で有効になります。
+- `LABEL koya.session="true"` を付けると、そのプロファイルではセッション（`--session`）が既定で有効になります。
 
 ## Windows
 
