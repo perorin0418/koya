@@ -119,7 +119,7 @@ Windows 版の koya でだけ使えます（WSL の中の koya からは使え�
   - Windows の「コンテナー」機能が必要です（有効でなければ、有効にする手順を表示します）。
   - プロファイルは Windows 用の別系統です（同梱: base・node・python・dotnet・claude。
     ユーザー定義: %APPDATA%\koya\profiles-win\<名前>\Dockerfile）。
-    ベースイメージ（servercore）のタグはホストのビルドに合わせて自動で選び、ビルド引数 BASE_TAG で渡します。
+    ベースイメージ（windows/server）のタグはホストのビルドに合わせて自動で選び、ビルド引数 BASE_TAG で渡します。
   - カレントディレクトリは、C: ならそのままのパス、ほかのドライブなら C:\mnt\<ドライブ>\... にマウントします。
   - ユーザーは ContainerAdministrator です。
   - --session・koya attach --win は、tmux の代わりに psmux（base に同梱）を使います。

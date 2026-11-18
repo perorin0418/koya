@@ -301,6 +301,8 @@ Rancher Desktop は Windows コンテナに対応していないため、koya �
 | 17764〜20347（Windows 10 1903 以降） | `ltsc2019` | hyperv |
 
 - `KOYA_WIN_BASE_TAG`・`KOYA_WIN_ISOLATION` で上書きできる。
+- base は完全版の `mcr.microsoft.com/windows/server` を使う（Playwright のブラウザーなど、Server Core では動かないおそれのあるツールのため）。
+  `windows/server` は ltsc2022 以降にしかないため、`ltsc2019` になるホスト（ビルド 20348 未満）では base をビルドできない。
 - タグは `--build-arg BASE_TAG=<タグ>` で Dockerfile に渡し、ビルド引数もイメージのハッシュに含める（ホストを上げたら再ビルド）。
 - `build` と `run` に `--isolation` を付ける（クライアント版 Windows の既定は hyperv のため）。
 
@@ -332,7 +334,7 @@ Windows コンテナでは、C: の中身のあるディレクトリにはマウ
 
 | 名前 | 中身 |
 |---|---|
-| base | Server Core（`BASE_TAG`）+ PowerShell 7.7 + Git for Windows 2.56（PortableGit、`C:\Git`）+ psmux 3.4.0（`C:\psmux`） |
+| base | Windows Server 完全版（`windows/server:BASE_TAG`）+ PowerShell 7.7 + Git for Windows 2.56（PortableGit、`C:\Git`）+ psmux 3.4.0（`C:\psmux`） |
 | node | base + Node.js 26 LTS（`C:\nodejs`）。グローバルの入れ先は `C:\npm-global` |
 | python | base + Python 3.14（`C:\Python314`）+ uv。3.15 にしないのは wheel がそろっているため |
 | dotnet | base + .NET SDK 10.0（`C:\dotnet`） |

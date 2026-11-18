@@ -307,7 +307,7 @@ func Status() string {
 	} else if base, err := BaseFor(build); err != nil {
 		fmt.Fprintf(&b, "ホストのビルド: %d（%v）\n", build, err)
 	} else {
-		fmt.Fprintf(&b, "ホストのビルド: %d → ベースイメージ servercore:%s、分離: %s\n", build, base.Tag, base.Isolation)
+		fmt.Fprintf(&b, "ホストのビルド: %d → ベースイメージ windows/server:%s、分離: %s\n", build, base.Tag, base.Isolation)
 	}
 	if err := checkContainersFeature(); err != nil {
 		fmt.Fprintln(&b, "コンテナー機能: 無効")

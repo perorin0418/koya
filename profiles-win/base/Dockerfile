@@ -1,10 +1,12 @@
 # escape=`
-# koya base（Windows コンテナ）: Windows Server Core + PowerShell 7 + Git for Windows（bash 付き）+ psmux
+# koya base（Windows コンテナ）: Windows Server（完全版）+ PowerShell 7 + Git for Windows（bash 付き）+ psmux
 # BASE_TAG は koya がホストの OS のビルドに合わせて渡す（ltsc2022 / ltsc2025 など）。
 # プロセス分離では、ホストとイメージのビルドが合っていないと起動できないため。
 # ツールの版とハッシュは固定する。版を上げるときは、公式の配布元のハッシュに書き換える。
+# 完全版にするのは、Server Core では動かないおそれのあるツール（Playwright のブラウザーなど）を動かすため。
+# windows/server のイメージは ltsc2022 以降にしかない。
 ARG BASE_TAG=ltsc2022
-FROM mcr.microsoft.com/windows/servercore:${BASE_TAG}
+FROM mcr.microsoft.com/windows/server:${BASE_TAG}
 
 SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 

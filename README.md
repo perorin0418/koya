@@ -254,7 +254,7 @@ koya win status                # デーモンとホストの状態
 
   | 名前 | 中身 |
   |---|---|
-  | `base` | Server Core + PowerShell 7 + Git for Windows（`C:\Git`。bash も入る）+ psmux（セッション機能用） |
+  | `base` | Windows Server（完全版）+ PowerShell 7 + Git for Windows（`C:\Git`。bash も入る）+ psmux（セッション機能用） |
   | `node` | base + Node.js LTS、npm、corepack |
   | `python` | base + Python 3.14、pip、venv、uv |
   | `dotnet` | base + .NET SDK 10（LTS） |
@@ -282,7 +282,7 @@ koya win status                # デーモンとホストの状態
 | `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` など）。既定は podman → docker の順に自動検出 |
 | `KOYA_PROFILE` | 既定のプロファイル |
 | `KOYA_WIN_PROFILE` | `--win` のときの既定のプロファイル |
-| `KOYA_WIN_BASE_TAG` | `--win` のベースイメージ（servercore）のタグ。既定はホストのビルドから自動で選ぶ |
+| `KOYA_WIN_BASE_TAG` | `--win` のベースイメージ（windows/server）のタグ。既定はホストのビルドから自動で選ぶ |
 | `KOYA_WIN_ISOLATION` | `--win` の分離の方式（`process` / `hyperv`）。既定はホストのビルドから自動で選ぶ |
 
 `koya help config` で設定ファイルの書き方を表示します。設計の詳細は [docs/design.md](docs/design.md) を参照。

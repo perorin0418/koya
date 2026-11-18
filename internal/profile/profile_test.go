@@ -57,7 +57,7 @@ func TestCycle(t *testing.T) {
 func TestWinStore(t *testing.T) {
 	fsys := fstest.MapFS{
 		"profiles-linux/base/Dockerfile": {Data: []byte("FROM fedora\n")},
-		"profiles-win/base/Dockerfile":   {Data: []byte("ARG BASE_TAG\nFROM mcr.microsoft.com/windows/servercore:${BASE_TAG}\n")},
+		"profiles-win/base/Dockerfile":   {Data: []byte("ARG BASE_TAG\nFROM mcr.microsoft.com/windows/server:${BASE_TAG}\n")},
 		"profiles-win/dev/Dockerfile":    {Data: []byte("FROM localhost/koya/base\n")},
 	}
 	s := NewWinStore(fsys)
@@ -66,7 +66,7 @@ func TestWinStore(t *testing.T) {
 		t.Fatalf("Names() = %s", got)
 	}
 	p, err := s.Get("base")
-	if err != nil || !strings.Contains(string(p.Files["Dockerfile"]), "servercore") {
+	if err != nil || !strings.Contains(string(p.Files["Dockerfile"]), "windows/server") {
 		t.Fatalf("Get(base) = %v, %v", p, err)
 	}
 	s.BuildArgs = []string{"BASE_TAG=ltsc2022"}
@@ -82,7 +82,7 @@ func TestWinStore(t *testing.T) {
 
 func TestUsedBuildArgs(t *testing.T) {
 	args := []string{"BASE_TAG=ltsc2025", "OTHER=1"}
-	base := []byte("# escape=`\nARG BASE_TAG=ltsc2022\nFROM mcr.microsoft.com/windows/servercore:${BASE_TAG}\n")
+	base := []byte("# escape=`\nARG BASE_TAG=ltsc2022\nFROM mcr.microsoft.com/windows/server:${BASE_TAG}\n")
 	if got := strings.Join(usedBuildArgs(base, args), ","); got != "BASE_TAG=ltsc2025" {
 		t.Errorf("base: %q", got)
 	}
