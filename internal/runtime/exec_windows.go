@@ -12,6 +12,9 @@ import (
 // Exec はランタイムのコマンドを子プロセスとして実行し、その終了コードで koya を終了する。
 // Windows にはプロセスを置き換える仕組み（exec）がないため。成功すると戻らない。
 func (r *Runtime) Exec(args ...string) error {
+	if Verbose {
+		logf("実行（ここからはコンテナの中）: %s", r.commandLine(args))
+	}
 	cmd := exec.Command(r.Bin, r.argv(args)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	// Ctrl-C は子プロセス（コンテナ内のプロセス）に任せ、koya 自身は終了しない

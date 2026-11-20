@@ -71,15 +71,17 @@ func (r *Runtime) Output(args ...string) (string, error) {
 	cmd := exec.Command(r.Bin, r.argv(args)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	end := r.trace(args)
 	out, err := cmd.Output()
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
 		}
-		return string(out), fmt.Errorf("%s %s: %s", filepath.Base(r.Bin), args[0], msg)
+		err = fmt.Errorf("%s %s: %s", filepath.Base(r.Bin), args[0], msg)
 	}
-	return string(out), nil
+	end(err)
+	return string(out), err
 }
 
 // Run はコマンドを実行する。標準出力は stderr に流す（koya の出力と混ぜないため）。
@@ -88,14 +90,21 @@ func (r *Runtime) Run(args ...string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	end := r.trace(args)
+	err := cmd.Run()
+	end(err)
+	if err != nil {
 		return fmt.Errorf("%s %s に失敗しました: %w", filepath.Base(r.Bin), args[0], err)
 	}
 	return nil
 }
 
 // Command は Prefix を付けたコマンドを返す（標準入出力の接続は呼び出し側で行う）。
+// 詳細ログでは、作った時点で内容だけを表示する（実行するのは呼び出し側のため）。
 func (r *Runtime) Command(args ...string) *exec.Cmd {
+	if Verbose {
+		logf("実行: %s", r.commandLine(args))
+	}
 	return exec.Command(r.Bin, r.argv(args)...)
 }
 
