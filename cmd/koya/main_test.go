@@ -51,3 +51,21 @@ func TestStripVerbose(t *testing.T) {
 		t.Errorf("got %v (Verbose=%v), want %v", got, runtime.Verbose, want)
 	}
 }
+
+func TestShellTTYWarning(t *testing.T) {
+	cases := []struct {
+		in, out bool
+		warn    bool
+	}{
+		{true, true, false},   // 普通の端末
+		{true, false, true},   // 出力だけが端末でない（止まったように見える）
+		{false, true, false},  // 入力をパイプで渡している
+		{false, false, false}, // スクリプトから呼んでいる
+	}
+	for _, c := range cases {
+		got := shellTTYWarning(c.in, c.out)
+		if (got != "") != c.warn {
+			t.Errorf("shellTTYWarning(%v, %v) = %q, want warn=%v", c.in, c.out, got, c.warn)
+		}
+	}
+}

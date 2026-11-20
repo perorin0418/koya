@@ -527,6 +527,9 @@ func cmdRun(args []string) error {
 		command = container.SessionCommand(win, container.SessionName(session.name, command), command)
 	}
 	if len(command) == 0 {
+		if w := shellTTYWarning(isTTY(os.Stdin), isTTY(os.Stdout)); w != "" {
+			fmt.Fprintln(os.Stderr, w)
+		}
 		command = container.DefaultShell
 		if win {
 			command = container.WinShell(tty)
@@ -708,6 +711,20 @@ func readProfileFile(path string) string {
 		}
 	}
 	return ""
+}
+
+// shellTTYWarning は、シェルを起動するときに、標準入力は端末なのに標準出力が端末でない場合の警告を返す。
+// この状態ではシェルがプロンプトを出さず、出力も画面に出ないため、止まったように見える
+// （ssh の RemoteCommand に exec `$SHELL -l` とバッククォートで書いた場合など）。
+// コマンドを指定したとき（koya run -- cmd | grep など）は、出力をパイプに流すのが普通なので警告しない。
+func shellTTYWarning(stdinTTY, stdoutTTY bool) string {
+	if !stdinTTY || stdoutTTY {
+		return ""
+	}
+	return "koya: 警告: 標準入力は端末ですが、標準出力が端末ではありません（パイプかファイルに向いています）。\n" +
+		"      シェルはプロンプトを出さずに動き、出力も画面に出ないため、止まったように見えます。\n" +
+		"      ls -l /proc/$$/fd/1 >&2 で、今のシェルの標準出力の向き先を確かめてください\n" +
+		"      （ssh でつなぐときのコマンドに exec `$SHELL -l` のようなバッククォートがあると、こうなります）。"
 }
 
 func isTTY(f *os.File) bool {
