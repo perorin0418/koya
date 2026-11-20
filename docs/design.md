@@ -125,6 +125,27 @@ Linux のホストで GPU があれば、Linux コンテナの作成時に自動
 - デバイスの検出はコンテナ作成時だけ行う。ランタイムが別のマシンにある場合は、koya を動かすマシンの `/dev` を見るので使えない。
 - ROCm のライブラリはイメージに入れない（PyTorch の ROCm 版などは自前で持っているため）。必要ならコンテナ内で `sudo dnf install rocminfo` などで入れる。
 
+## ホストのランタイムの受け渡し（--dood）
+
+コンテナの中からコンテナを起動できるように、ホストのランタイムの API のソケットをマウントする
+（docker-outside-of-docker。入れ子のランタイムは特権が要るので採らない）。ソケットは作成時にだけ探す。
+
+- ソケットの場所:
+  - podman: `podman info` の `.Host.RemoteSocket.Path`。podman machine でも VM の中のパスが返るので、そのままマウント元にできる。
+    `.Host.RemoteSocket.Exists` が false ならエラーにして `podman.socket` の有効化を案内する。
+  - docker（Linux）: `DOCKER_HOST`、なければ `docker context inspect` の `unix://` のパス。`tcp://` などはエラー。
+    Linux の Docker Desktop（`~/.docker/desktop/`）は VM の中なので `/var/run/docker.sock`。
+  - docker（Linux 以外）: Docker Desktop などは `/var/run/docker.sock` を指定すると VM の中のソケットがマウントされる。
+- コンテナ内の場所は各クライアントの既定（docker: `/var/run/docker.sock`、podman: `/run/podman/podman.sock`）。
+  `DOCKER_HOST` を設定し、podman なら `CONTAINER_HOST` も設定する（podman のソケットは docker 互換の API も話す）。
+- 補助グループ: rootless の podman はソケットの所有者がユーザー自身（`--userns=keep-id`）、コンテナ内で UID 0 として
+  動かす場合は root なので、何もしない。それ以外は、ソケットの所有 GID を `--group-add` で足す。
+  GID はランタイムのマシン（VM のこともある）にあるソケットを見る必要があるので、ホストで stat せず、
+  プロファイルのイメージでソケットをマウントした使い捨てのコンテナで `stat -c %g` して調べる。調べられなければ警告して続ける。
+- SELinux が有効なホストでもソケットを開けるように `--security-opt label=disable` を付ける。
+- クライアント（docker-cli・podman-remote）はイメージに入れない。作成後になければ入れ方を表示する。
+- `--win` では使えない（名前付きパイプのマウントは未対応）。
+
 ## プロファイル（同梱イメージ）
 
 最初に同梱するもの:
@@ -162,6 +183,7 @@ Linux のホストで GPU があれば、Linux コンテナの作成時に自動
 | `--home` / `--no-home` | 永続ホームを使う / 使わない |
 | `--home-scope shared\|project` | 永続ホームの単位 |
 | `--gpu` / `--no-gpu` | GPU を必ず使う / 使わない（省略時は自動判定。Linux のみ） |
+| `--dood` | ホストのランタイムの API のソケットを渡す（DooD: Docker-outside-of-Docker。下記。Linux コンテナのみ） |
 
 これらはコンテナ作成時にだけ効く。既存のコンテナと違うオプションを指定した場合は、
 警告を出して `koya rm` で作り直すよう促す（作成時の設定はラベル `koya.opts` に記録して比較する）。

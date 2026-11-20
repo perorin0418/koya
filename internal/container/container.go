@@ -56,6 +56,7 @@ type Options struct {
 	Volumes  []string
 	Home     string // 永続ホームとしてマウントするホストのディレクトリ（空なら使わない）
 	GPU      bool   // GPU を使えるようにする（Linux コンテナのみ）
+	HostRT   bool   // ホストのランタイム（docker / podman）をコンテナ内から使えるようにする（Linux コンテナのみ）
 }
 
 // Key は設定を比較用の文字列にする（ラベル koya.opts に入れる）。
@@ -82,6 +83,9 @@ func (o Options) Key() string {
 	}
 	if o.GPU {
 		parts = append(parts, "gpu")
+	}
+	if o.HostRT {
+		parts = append(parts, "dood")
 	}
 	return strings.Join(parts, ";")
 }
@@ -231,7 +235,8 @@ type Spec struct {
 	Hash    string
 	Opts    Options
 	User    User
-	GPU     *GPU // Opts.GPU のときに渡すデバイス（DetectGPU で探す）
+	GPU     *GPU         // Opts.GPU のときに渡すデバイス（DetectGPU で探す）
+	HostRT  *HostRuntime // Opts.HostRT のときに渡すソケット（DetectHostRuntime で探す）
 
 	Isolation string // Windows コンテナの分離の方式（process / hyperv）。Linux コンテナでは空
 }
@@ -275,6 +280,9 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 	}
 	if s.Opts.GPU {
 		args = append(args, gpuArgs(rt, s.User, s.GPU)...)
+	}
+	if s.Opts.HostRT {
+		args = append(args, hostRuntimeArgs(s.HostRT)...)
 	}
 	return args
 }

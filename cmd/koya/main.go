@@ -79,6 +79,10 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
   --gpu            GPU を必ず使う（見つからなければエラー）
   --no-gpu         GPU を使わない
                    どちらもなければ、GPU（/dev/kfd、/dev/dri）があれば自動で使う（Linux のみ）
+  --dood           ホストのランタイム（docker / podman）をコンテナ内から使えるようにする
+                   （DooD: Docker-outside-of-Docker。中から作ったコンテナはホストの上で動く）。
+                   どちらかを自動で判断し、API のソケットのマウントと DOCKER_HOST などの設定をする。
+                   ホストのコンテナをすべて操作できるようになるので、隔離は弱まる（Linux コンテナのみ）
 
 そのほかのオプション:
   --session[=名前] セッションの中で動かす。端末が切れても動き続け、同じコマンドか
@@ -306,6 +310,7 @@ func cmdRun(args []string) error {
 	fs.StringVar(&homeScope, "home-scope", "", "")
 	fs.BoolVar(&gpu, "gpu", false, "")
 	fs.BoolVar(&noGPU, "no-gpu", false, "")
+	fs.BoolVar(&opts.HostRT, "dood", false, "")
 	fs.BoolVar(&win, "win", false, "")
 	fs.BoolVar(&linux, "linux", false, "")
 	var session sessionFlag
@@ -329,6 +334,9 @@ func cmdRun(args []string) error {
 	}
 	if gpu && win {
 		return errors.New("--gpu は --win（Windows コンテナ）では使えません")
+	}
+	if opts.HostRT && win {
+		return errors.New("--dood は --win（Windows コンテナ）では使えません")
 	}
 	if homeScope != "" && homeScope != "shared" && homeScope != "project" {
 		return errors.New("--home-scope は shared か project です")
@@ -462,7 +470,21 @@ func cmdRun(args []string) error {
 		}
 	}
 
-	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user, GPU: gpuDev, Isolation: isolation}
+	// ホストのランタイム: ソケットはコンテナを作るときだけ探す。既存のコンテナは作成時の設定に従う
+	var hostRT *container.HostRuntime
+	if opts.HostRT && (!exists || rm) {
+		var warn string
+		if hostRT, warn, err = container.DetectHostRuntime(rt, user, prof); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "koya: ホストの %s（%s）をコンテナ内から使えるようにします（%s）\n",
+			hostRT.Kind, hostRT.Socket, hostRT.Target())
+		if warn != "" {
+			fmt.Fprintf(os.Stderr, "koya: 警告: %s\n", warn)
+		}
+	}
+
+	spec := container.Spec{Profile: prof, Workdir: wd, Hash: hash, Opts: opts, User: user, GPU: gpuDev, HostRT: hostRT, Isolation: isolation}
 	tty := isTTY(os.Stdin) && isTTY(os.Stdout)
 	// セッション: --session / --no-session → プロファイルの LABEL koya.session の順に決める。
 	// ラベルで有効になる場合は、使えない状況（--rm・端末なし）では黙ってセッションなしで動かす。
@@ -501,6 +523,7 @@ func cmdRun(args []string) error {
 		if err := container.Create(rt, name, spec); err != nil {
 			return err
 		}
+		hostRuntimeHint(rt, name, spec)
 	} else {
 		if (optsGiven && info.Opts != opts.Key()) || container.HomeOf(info.Opts) != opts.Home ||
 			container.GPUOf(info.Opts) != opts.GPU {
@@ -550,6 +573,7 @@ func runOneshot(rt *runtime.Runtime, spec container.Spec, tty bool, command []st
 		return err
 	}
 	defer func() { _ = rt.Quiet("rm", "-f", name) }()
+	hostRuntimeHint(rt, name, spec)
 	// Ctrl-C はコンテナ内のプロセスに届くので、koya 自身は終了しないようにする
 	signal.Ignore(os.Interrupt)
 	cmd := rt.Command(container.ExecArgs(rt, name, spec.Workdir, tty, command)...)
@@ -562,6 +586,22 @@ func runOneshot(rt *runtime.Runtime, spec container.Spec, tty bool, command []st
 		return err
 	}
 	return nil
+}
+
+// hostRuntimeHint は、--dood で作ったコンテナにクライアント（docker / podman）がなければ、入れ方を知らせる。
+func hostRuntimeHint(rt *runtime.Runtime, name string, spec container.Spec) {
+	if spec.HostRT == nil {
+		return
+	}
+	if rt.Quiet("exec", name, "sh", "-c", "command -v docker || command -v podman || command -v podman-remote") == nil {
+		return
+	}
+	pkg := "docker-cli"
+	if spec.HostRT.Kind == "podman" {
+		pkg = "podman-remote"
+	}
+	fmt.Fprintf(os.Stderr, "koya: コンテナに docker・podman のコマンドがありません。sudo dnf install -y %s などで入れてください"+
+		"（プロファイルの Dockerfile に書いておくと、作り直しても残ります）\n", pkg)
 }
 
 // hostUser は koya を実行したホストのユーザーを返す。
