@@ -127,3 +127,32 @@ func TestUserDirsLegacy(t *testing.T) {
 		t.Fatalf("UserDir() = %s", s.UserDir())
 	}
 }
+
+func TestExternalImages(t *testing.T) {
+	cases := []struct {
+		name string
+		df   string
+		args []string
+		want string
+	}{
+		{"multi-stage", "FROM docker.io/library/golang:latest AS golang\n" +
+			"FROM docker.io/library/maven:3 AS maven\n" +
+			"FROM localhost/koya/claude\n" +
+			"COPY --from=maven /opt/java /opt/java\n" +
+			"COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/\n" +
+			"COPY --chown=1:1 --from=golang /usr/local/go /usr/local/go\n",
+			nil, "docker.io/library/golang:latest,docker.io/library/maven:3,ghcr.io/astral-sh/uv:latest"},
+		{"build arg", "# escape=`\nARG BASE_TAG=ltsc2022\nFROM mcr.microsoft.com/windows/server:${BASE_TAG}\n",
+			[]string{"BASE_TAG=ltsc2025"}, "mcr.microsoft.com/windows/server:ltsc2025"},
+		{"arg default", "ARG V=3.13\nFROM python:$V-slim\n", nil, "python:3.13-slim"},
+		{"skip", "FROM --platform=linux/amd64 koya/base\nFROM scratch AS out\nFROM ${UNKNOWN}\nCOPY --from=0 /a /b\nCOPY --from=out /a /b\n",
+			nil, ""},
+		{"continuation", "FROM \\\n  fedora:latest\n# comment \\\nRUN echo\n", nil, "fedora:latest"},
+		{"dedupe", "FROM a:1 AS x\nFROM a:1\nCOPY --from=a:1 /a /b\n", nil, "a:1"},
+	}
+	for _, c := range cases {
+		if got := strings.Join(ExternalImages([]byte(c.df), c.args), ","); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}

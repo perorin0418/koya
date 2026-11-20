@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/perorin0418/koya/internal/config"
@@ -38,9 +39,10 @@ type Profile struct {
 }
 
 var (
-	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
-	argRe  = regexp.MustCompile(`(?im)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)`)
-	fromRe = regexp.MustCompile(`(?i)^\s*FROM\s+(?:--\S+\s+)*(?:localhost/)?koya/([a-z0-9][a-z0-9_.-]*)(?::latest)?(?:\s|$)`)
+	nameRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
+	argRe    = regexp.MustCompile(`(?im)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)`)
+	escapeRe = regexp.MustCompile("(?m)\\A(?:#.*\\n)*?#\\s*escape\\s*=\\s*([\\\\`])")
+	fromRe   = regexp.MustCompile(`(?i)^\s*FROM\s+(?:--\S+\s+)*(?:localhost/)?koya/([a-z0-9][a-z0-9_.-]*)(?::latest)?(?:\s|$)`)
 )
 
 // ValidName はプロファイル名として使えるかを返す。
@@ -62,6 +64,11 @@ type Store struct {
 	// BuildArgs はハッシュにも含め、変わったら再ビルドする。
 	BuildArgs  []string // KEY=VAL
 	BuildFlags []string // --isolation process など
+
+	// NoCache なら、レイヤーのキャッシュを使わずにビルドし、外部のイメージ（FROM・COPY --from）も
+	// 先に取り直す。親プロファイルも内容に関係なく作り直す（koya build --no-cache）。
+	NoCache bool
+	rebuilt map[string]bool // NoCache で作り直し済みのプロファイル（同じ親を何度も作り直さない）
 }
 
 // NewStore は Linux コンテナ用の Store を作る。builtin は "profiles-linux" ディレクトリを根に持つ FS。
@@ -264,7 +271,7 @@ func ImageHash(rt *runtime.Runtime, name string) string {
 }
 
 // Ensure はイメージが最新でなければビルドする（親プロファイルも先に用意する）。
-// force なら name 自身は必ずビルドし直す。
+// force なら name 自身は必ずビルドし直す。NoCache なら親も含めて必ずビルドし直す（1回ずつ）。
 func (s *Store) Ensure(rt *runtime.Runtime, name string, force bool) error {
 	p, err := s.Get(name)
 	if err != nil {
@@ -279,10 +286,23 @@ func (s *Store) Ensure(rt *runtime.Runtime, name string, force bool) error {
 			return err
 		}
 	}
-	if !force && ImageHash(rt, name) == want {
+	if s.NoCache {
+		if s.rebuilt[name] {
+			return nil
+		}
+	} else if !force && ImageHash(rt, name) == want {
 		return nil
 	}
-	return s.build(rt, p, want)
+	if err := s.build(rt, p, want); err != nil {
+		return err
+	}
+	if s.NoCache {
+		if s.rebuilt == nil {
+			s.rebuilt = map[string]bool{}
+		}
+		s.rebuilt[name] = true
+	}
+	return nil
 }
 
 func (s *Store) build(rt *runtime.Runtime, p *Profile, hash string) error {
@@ -307,8 +327,20 @@ func (s *Store) build(rt *runtime.Runtime, p *Profile, hash string) error {
 		"--label", "koya.profile=" + p.Name,
 		"--label", "koya.hash=" + hash,
 	}
-	for _, a := range usedBuildArgs(p.Files["Dockerfile"], s.BuildArgs) {
+	buildArgs := usedBuildArgs(p.Files["Dockerfile"], s.BuildArgs)
+	for _, a := range buildArgs {
 		args = append(args, "--build-arg", a)
+	}
+	if s.NoCache {
+		// --pull は使わない。FROM localhost/koya/... の親プロファイルまでレジストリから
+		// 取ろうとして失敗するため、外部のイメージだけを名前を挙げて取り直す。
+		for _, img := range ExternalImages(p.Files["Dockerfile"], buildArgs) {
+			fmt.Fprintf(os.Stderr, "koya: イメージ %s を取り直します\n", img)
+			if err := rt.Run("pull", img); err != nil {
+				return errors.New("イメージの取得に失敗しました: " + err.Error())
+			}
+		}
+		args = append(args, "--no-cache")
 	}
 	args = append(args, s.BuildFlags...)
 	err = rt.Run(append(args, dir)...)
@@ -316,6 +348,108 @@ func (s *Store) build(rt *runtime.Runtime, p *Profile, hash string) error {
 		return errors.New("イメージのビルドに失敗しました: " + err.Error())
 	}
 	return nil
+}
+
+// ExternalImages は Dockerfile が使う外部のイメージ（FROM と COPY --from=）を、出てきた順に返す。
+// 親プロファイル（koya/<名前>）、ステージ名、ステージ番号、scratch、展開できない変数を含むものは除く。
+// 変数は buildArgs、なければ最初の FROM より前の ARG の既定値で展開する。
+func ExternalImages(dockerfile []byte, buildArgs []string) []string {
+	vars := map[string]string{}
+	stages := map[string]bool{}
+	seen := map[string]bool{}
+	var out []string
+	add := func(img string) {
+		for k, v := range vars {
+			img = strings.ReplaceAll(img, "${"+k+"}", v)
+			img = strings.ReplaceAll(img, "$"+k, v)
+		}
+		l := strings.ToLower(img)
+		switch {
+		case img == "", strings.Contains(img, "$"), stages[l], l == "scratch",
+			strings.HasPrefix(l, "localhost/koya/"), strings.HasPrefix(l, "koya/"), seen[img]:
+			return
+		}
+		if _, err := strconv.Atoi(img); err == nil {
+			return
+		}
+		seen[img] = true
+		out = append(out, img)
+	}
+	sawFrom := false
+	for _, line := range logicalLines(dockerfile) {
+		f := strings.Fields(line)
+		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		switch strings.ToUpper(f[0]) {
+		case "ARG":
+			if sawFrom || len(f) < 2 {
+				continue
+			}
+			if k, v, ok := strings.Cut(f[1], "="); ok {
+				vars[k] = strings.Trim(v, `"'`)
+			}
+		case "FROM":
+			if !sawFrom {
+				sawFrom = true
+				for _, a := range buildArgs {
+					if k, v, ok := strings.Cut(a, "="); ok {
+						vars[k] = v
+					}
+				}
+			}
+			rest := f[1:]
+			for len(rest) > 0 && strings.HasPrefix(rest[0], "--") {
+				rest = rest[1:]
+			}
+			if len(rest) == 0 {
+				continue
+			}
+			add(rest[0])
+			if len(rest) >= 3 && strings.EqualFold(rest[1], "AS") {
+				stages[strings.ToLower(rest[2])] = true
+			}
+		case "COPY":
+			for _, x := range f[1:] {
+				if !strings.HasPrefix(x, "--") {
+					break
+				}
+				if v, ok := strings.CutPrefix(x, "--from="); ok {
+					add(v)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// logicalLines は Dockerfile を、行の継続（既定は \、# escape=` なら `）をつないだ行に分ける。
+func logicalLines(dockerfile []byte) []string {
+	text := strings.ReplaceAll(string(dockerfile), "\r\n", "\n")
+	esc := "\\"
+	if m := escapeRe.FindStringSubmatch(text); m != nil {
+		esc = m[1]
+	}
+	var out []string
+	var cur strings.Builder
+	for _, l := range strings.Split(text, "\n") {
+		t := strings.TrimRight(l, " \t")
+		if strings.HasPrefix(strings.TrimSpace(t), "#") {
+			continue // コメントは継続の対象にならない（継続の途中にあっても飛ばす）
+		}
+		if strings.HasSuffix(t, esc) {
+			cur.WriteString(strings.TrimSuffix(t, esc))
+			cur.WriteString(" ")
+			continue
+		}
+		cur.WriteString(t)
+		out = append(out, cur.String())
+		cur.Reset()
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // usedBuildArgs は、Dockerfile が ARG で宣言しているビルド引数だけを返す

@@ -43,7 +43,8 @@ const usage = `koya - カレントディレクトリをマウントした用途�
   koya image rm [-f] <プロファイル...|-a>   イメージを消す（次に使うときにビルドし直す）
   koya image prune               ビルドし直して古くなったイメージを消す
   koya profiles                  使えるプロファイルの一覧
-  koya build [プロファイル...]    イメージをビルドし直す（省略時は全プロファイル）
+  koya build [--no-cache] [プロファイル...]   イメージをビルドし直す（省略時は全プロファイル。
+                                 --no-cache でキャッシュを使わず、親プロファイルも含めて作り直す）
   koya self-update [--check]     koya 本体を最新版に更新する（--check は確認だけ）
   koya win <status|setup|uninstall>   Windows コンテナ用のデーモンを管理する（Windows のみ）
   koya version                   バージョンを表示する
@@ -888,8 +889,11 @@ func cmdProfiles(args []string) error {
 }
 
 func cmdBuild(args []string) error {
-	const help = "使い方: koya build [--linux | --win] [プロファイル...]\n"
+	const help = "使い方: koya build [--linux | --win] [--no-cache] [プロファイル...]\n" +
+		"  --no-cache  キャッシュを使わずにビルドし直す。FROM・COPY --from= の外部のイメージも取り直し、\n" +
+		"              親プロファイル（FROM koya/<名前>）も含めてすべて作り直す\n"
 	fs := newFlagSet("build")
+	noCache := fs.Bool("no-cache", false, "")
 	win := fs.Bool("win", false, "")
 	linux := fs.Bool("linux", false, "")
 	pos, err := parseInterspersed(fs, args)
@@ -913,6 +917,7 @@ func cmdBuild(args []string) error {
 		}
 		store = profile.NewStore(koya.Profiles)
 	}
+	store.NoCache = *noCache
 	if len(pos) == 0 {
 		pos = store.Names()
 	}
