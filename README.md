@@ -85,6 +85,7 @@ koya help [コマンド]
 | `--home` / `--no-home` | 永続ホームを使う / 使わない（下記） |
 | `--home-scope shared\|project` | 永続ホームをプロファイルごとに共有するか、プロジェクトごとに分けるか |
 | `--gpu` / `--no-gpu` | GPU を必ず使う / 使わない（省略時は GPU があれば自動で使う。Linux のみ、下記） |
+| `--dood` | ホストの docker / podman をコンテナ内から使えるようにする（DooD: Docker-outside-of-Docker。Linux コンテナのみ、下記） |
 
 ### 既定のプロファイル
 
@@ -209,6 +210,34 @@ gpu = auto   # auto: あれば使う（既定）/ on: 必ず使う / off: 使わ
 - SELinux が有効なホスト（Fedora など）でもデバイスを開けるように、GPU を使うコンテナではラベルによる隔離（`label=disable`）を外します。
 - ROCm のライブラリはイメージに入っていません。PyTorch の ROCm 版（`pip install torch --index-url https://download.pytorch.org/whl/rocm6.4` など）は自前で持っているのでそのまま動きます。
 - コンシューマー向けの GPU で ROCm が対応していないと言われる場合は、`-e HSA_OVERRIDE_GFX_VERSION=11.0.0` のように指定します（値は GPU の世代に合わせる）。
+
+## コンテナの中からコンテナを起動する（`--dood`）
+
+`--dood`（DooD: Docker-outside-of-Docker の略）を付けると、ホストのランタイムの API のソケットをコンテナに渡し、コンテナの中の `docker` / `podman` から
+ホストのランタイムを使えるようにします。docker か podman か、rootful か rootless かは koya が自動で判断します。
+
+```bash
+koya run python --dood                              # ソケットを渡してコンテナを作る
+koya run python -- sudo dnf install -y podman-remote        # クライアントを入れる（docker なら docker-cli）
+koya run python -- podman-remote run --rm hello-world       # ホストのランタイムでコンテナが動く
+```
+
+| ホストのランタイム | マウント元 | コンテナ内の場所 | 設定する環境変数 |
+|---|---|---|---|
+| podman | `podman info` の API ソケット | `/run/podman/podman.sock` | `CONTAINER_HOST`・`DOCKER_HOST` |
+| docker | `DOCKER_HOST` か今のコンテキストのソケット（Docker Desktop などは `/var/run/docker.sock`） | `/var/run/docker.sock` | `DOCKER_HOST` |
+
+- **隔離は弱まります。** ソケットを使うとホストのコンテナをすべて操作でき、rootful のランタイムならホストの root と同じことができます。
+  信用しないコードを動かすコンテナには付けないでください。
+- 中から作ったコンテナは、入れ子ではなくホストのランタイムの上で（koya のコンテナと並んで）動きます。
+  そのため `-v` で渡すパスはホスト側のパスとして扱われます。カレントディレクトリはコンテナ内でも同じパスなので、そのまま渡せます。
+- rootless の podman では、API のソケットを有効にしておく必要があります（`systemctl --user enable --now podman.socket`）。
+  ないときはそう表示して止まります。
+- rootful の docker などでは、ソケットの所有グループ（`docker` など）をコンテナ内のユーザーに付け足します。
+- docker・podman のコマンドはイメージに入っていません。入っていないときは入れ方を表示します。
+  毎回使うなら、ユーザー定義プロファイルの Dockerfile で `RUN dnf install -y podman-remote` などとしておきます。
+- 判定はコンテナを作るときだけ行います。既存のコンテナで使うには、`koya rm -f <プロファイル>` してから作り直します。
+- `--win`（Windows コンテナ）では使えません。Windows で Linux コンテナを使う場合（Docker Desktop・Podman Desktop）は使えます。
 
 ## Windows
 
