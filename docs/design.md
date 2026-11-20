@@ -135,7 +135,7 @@ Linux のホストで GPU があれば、Linux コンテナの作成時に自動
 | `python` | base | python3, pip, venv, uv, gcc（C 拡張のビルド用） |
 | `node` | base | Node.js LTS, npm |
 | `go` | base | Go 最新安定版, gcc（cgo 用） |
-| `claude` | node | Claude Code。永続ホームが既定で有効。自動アップデートは切り、`koya build claude` で更新する |
+| `claude` | node | Claude Code。永続ホームが既定で有効。自動アップデートは切り、`koya build --no-cache claude` で更新する |
 
 - プロファイルは `profiles-linux/<名前>/Dockerfile` に置き、`go:embed` でバイナリに埋め込む。
 - `base` 以外は `FROM localhost/koya/base` で base を引き継ぐ。依存するイメージは自動で先にビルドする。
@@ -179,13 +179,17 @@ koya image ls                 koya のイメージの一覧
 koya image rm [-f] <プロファイル...|-a>  イメージを消す
 koya image prune              古くなったイメージを消す
 koya profiles                 使えるプロファイルの一覧
-koya build [プロファイル]      イメージをビルド/再ビルドする
+koya build [--no-cache] [プロファイル]   イメージをビルド/再ビルドする
 koya self-update [--check]    koya 本体を最新版に更新する
 koya version
 koya help [コマンド]
 ```
 
 - すべての操作はサブコマンドで指定する。引数なしの `koya` はヘルプを表示する。
+- `koya build --no-cache`:
+  - `--no-cache` を付けてビルドし、親プロファイル（`FROM koya/<名前>`）も内容に関係なく作り直す（1回の実行で各プロファイル1回ずつ）。
+  - 外部のイメージ（`FROM` と `COPY --from=` に書いたもの）は、ビルドの前に `pull` で取り直す。
+    `build --pull` は使わない。`FROM localhost/koya/...` の親プロファイルまでレジストリから取ろうとして失敗するため。
 - イメージの操作（`koya image`）:
   - 対象はラベル `koya.managed=true` のイメージ。Linux のランタイムはほかの用途と共用なので、`prune` もこのラベルで絞る。
     Windows のデーモンは koya 専用なので、`ls` は全部を出し、`prune` は名前のないイメージを全部消す。

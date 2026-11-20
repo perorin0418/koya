@@ -32,7 +32,8 @@ koya self-update --check   # 新しい版があるかだけ確かめる
 
 GitHub Releases から今の OS・CPU 向けのファイルを取ってきて、`checksums.txt` で中身を確かめてから入れ替えます。
 `/usr/local/bin` など書き込めない場所に置いている場合は `sudo koya self-update` を使ってください。
-イメージ（Fedora のパッケージや Claude Code など）を新しくするには、別に `koya build` を使います。
+イメージ（Fedora のパッケージや Claude Code など）を新しくするには、別に `koya build --no-cache` を使います。
+`--no-cache` を付けない `koya build` はレイヤーのキャッシュを使うので、Dockerfile が同じなら中身は新しくなりません。
 
 koya は起動時に、6 時間に 1 回ほど新しい版が出ていないかを確かめ、出ていればお知らせします
 （端末から使ったときだけ。結果はキャッシュに記録し、それ以外の起動では問い合わせません）。
@@ -51,7 +52,7 @@ koya image ls                  koya のイメージの一覧（--win ではベ�
 koya image rm [-f] <プロファイル...|-a>   イメージを消す（次に使うときにビルドし直す）
 koya image prune               ビルドし直して古くなったイメージを消す
 koya profiles                  使えるプロファイルの一覧
-koya build [プロファイル...]    イメージをビルドし直す（省略時は全プロファイル）
+koya build [--no-cache] [プロファイル...]   イメージをビルドし直す（省略時は全プロファイル）
 koya self-update [--check]     koya 本体を最新版に更新する
 koya version
 koya help [コマンド]
@@ -164,7 +165,7 @@ koya run claude -- claude --dangerously-skip-permissions   # 隔離環境なの�
 ```
 
 カレントディレクトリしか見えないので、ホストの他のファイルや SSH 鍵には触れません。
-Claude Code の更新は `koya build claude` でイメージを作り直してから、`koya rm -f claude` で作り直します。
+Claude Code の更新は `koya build --no-cache claude` でイメージを作り直してから、`koya rm -f claude` で作り直します。
 
 ### 自分でプロファイルを追加する
 
