@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/perorin0418/koya/internal/runtime"
+)
 
 func TestWindowsUser(t *testing.T) {
 	cases := map[string]string{
@@ -33,5 +38,16 @@ func TestSessionFlag(t *testing.T) {
 	f.Set("false")
 	if f.enabled || !f.set {
 		t.Fatalf("--session=false: %+v", f)
+	}
+}
+
+func TestStripVerbose(t *testing.T) {
+	old := runtime.Verbose
+	t.Cleanup(func() { runtime.Verbose = old })
+	runtime.Verbose = false
+	got := stripVerbose([]string{"run", "--rm", "--verbose", "mycc", "--", "echo", "--verbose"})
+	want := []string{"run", "--rm", "mycc", "--", "echo", "--verbose"}
+	if strings.Join(got, " ") != strings.Join(want, " ") || !runtime.Verbose {
+		t.Errorf("got %v (Verbose=%v), want %v", got, runtime.Verbose, want)
 	}
 }

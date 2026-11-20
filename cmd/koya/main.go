@@ -50,6 +50,9 @@ const usage = `koya - カレントディレクトリをマウントした用途�
   koya version                   バージョンを表示する
   koya help [コマンド]            ヘルプを表示する
 
+どのコマンドにも --verbose を付けられます。ランタイム（podman / docker）に渡すコマンドと、
+かかった時間・結果を表示します。終わらないコマンドは 10 秒ごとに「実行中」と表示します。
+
 プロファイルを省略したときは、上の階層へたどって見つかる .koya ファイル、
 環境変数 KOYA_PROFILE、base の順に決めます。
 
@@ -60,6 +63,7 @@ run・ls・stop・rm・container・image・profiles・build は、--linux（Linu
   KOYA_RUNTIME   使うランタイム（podman / docker）。既定は podman → docker の順に自動検出
   KOYA_PROFILE   既定のプロファイル
   KOYA_NO_UPDATE_CHECK  設定すると、起動時に新しい版を確かめない
+  KOYA_VERBOSE   設定すると、--verbose と同じく詳細ログを表示する
 `
 
 const runUsage = `使い方: koya run [プロファイル] [オプション] [-- コマンド...]
@@ -160,11 +164,29 @@ func main() {
 	}
 }
 
+// stripVerbose は -- より前にある --verbose を取り除き、あれば詳細ログを有効にする。
+// どのコマンドのどこに書いてもよいようにするため、各コマンドのフラグとは別に扱う。
+func stripVerbose(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i, a := range args {
+		if a == "--" {
+			return append(out, args[i:]...)
+		}
+		if a == "--verbose" {
+			runtime.Verbose = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 type exitError int
 
 func (e exitError) Error() string { return fmt.Sprintf("exit %d", int(e)) }
 
 func run(args []string) error {
+	args = stripVerbose(args)
 	if len(args) == 0 {
 		fmt.Print(usage)
 		return nil

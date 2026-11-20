@@ -315,12 +315,27 @@ koya win status                # デーモンとホストの状態
 
 詳しくは `koya help win` を参照。
 
+## 止まったとき（`--verbose`）
+
+どのコマンドにも `--verbose` を付けると、koya がランタイム（podman / docker）に渡すコマンドと、
+かかった時間・結果を表示します。終わらないコマンドは 10 秒ごとに「実行中」と表示するので、
+どこで止まっているかが分かります。環境変数 `KOYA_VERBOSE=1` でも同じです。
+
+```sh
+koya run --rm mycc --verbose
+# koya: [詳細] 実行: podman run -d --init --name koya-mycc-...-tmp1234 ...
+# koya: [詳細] 実行中（10s 経過）: podman run -d --init ...
+```
+
+表示されたコマンドは、そのまま手で実行して確かめられます（長いスクリプトの引数は省略して表示します）。
+
 ## 環境変数
 
 | 名前 | 意味 |
 |---|---|
 | `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` など）。既定は podman → docker の順に自動検出 |
 | `KOYA_PROFILE` | 既定のプロファイル |
+| `KOYA_VERBOSE` | 設定すると `--verbose` と同じく詳細ログを表示する |
 | `KOYA_WIN_PROFILE` | `--win` のときの既定のプロファイル |
 | `KOYA_WIN_BASE_TAG` | `--win` のベースイメージ（windows/server）のタグ。既定はホストのビルドから自動で選ぶ |
 | `KOYA_WIN_ISOLATION` | `--win` の分離の方式（`process` / `hyperv`）。既定はホストのビルドから自動で選ぶ |
