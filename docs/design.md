@@ -94,10 +94,33 @@ home.win.dir   = C:\koya\home-win      # 永続ホームの置き場所（Window
 home.enable = claude, python        # 既定で永続ホームを使うプロファイル（all で全部）
 home.scope  = shared                # shared / project
 gpu         = auto                  # auto（あれば使う）/ on（必ず使う）/ off（使わない）
+pkg-cache   = on                    # on（パッケージのキャッシュを使う。既定）/ off
+pkg-cache.linux.dir = /mnt/pool/koya-pkg-cache  # キャッシュの置き場所（既定: ~/.cache/koya/pkg-cache）
 ```
 
 - 置き場所のキーは Linux 用と Windows 用で対にする（`home.linux.dir` / `home.win.dir`）。
   旧名の `home.dir` は `home.linux.dir` と同じ意味で読む（既存の設定ファイルを壊さないため）。両方書いたらエラーにする。
+
+## パッケージのキャッシュ
+
+uv・pip・npm・Go などのパッケージマネージャーのキャッシュを、プロファイルごとのディレクトリに置き、2回目以降のセットアップを速くする。
+
+| 項目 | 決めたこと | 理由 |
+|---|---|---|
+| 単位 | プロファイルごとに1つ（`<pkg-cache.linux.dir>/<プロファイル>/`）。全プロジェクト・`--rm` のコンテナで共有 | キャッシュはプロジェクトをまたいで使い回せる。uv・pip・npm・Go のキャッシュは同時に使われても壊れない作り |
+| 置き場所 | ホストのディレクトリ。既定は OS のキャッシュの置き場所（Go の `os.UserCacheDir()`）の下の `koya/pkg-cache`（Linux は `~/.cache/koya/pkg-cache`、macOS は `~/Library/Caches/koya/pkg-cache`、Windows は `%LOCALAPPDATA%\koya\pkg-cache`）。コンテナ内は `/var/cache/koya` | 消えても困らないものなので、XDG の規約どおりキャッシュの置き場所に置く（バックアップの対象外になりやすい。版の確認の結果 `update-check.json` と同じ場所）。永続ホームと同じく設定で置き場所を変えられる。共有のディスクを指定すれば複数のホストで共有できる（ランタイムの名前付きボリュームはホストごとに別になるため採らなかった） |
+| 向け方 | 環境変数（`XDG_CACHE_HOME`、`npm_config_cache`、`GOMODCACHE`、`UV_LINK_MODE=copy`）。`-e` より前に置き、上書きできるようにする | ユーザー定義のプロファイルでも、Dockerfile を変えずに効く |
+| 既定 | 有効。`--pkg-cache` / `--no-pkg-cache`、設定ファイルの `pkg-cache`（`on` / `off`）の順に決める | 消えても困らないものだけを置くので、既定で使ってよい |
+| 寿命 | `koya rm` では消さない。消すときはディレクトリを消す | コンテナを作り直しても速くするのが目的のため |
+
+- ディレクトリは永続ホームと同じく koya が作り（0700）、SELinux の環境では `:z` を付けてマウントする。
+- 永続ホームとは独立に使う。永続ホームを使うプロファイルでも `XDG_CACHE_HOME` はこちらに向く。
+- 複数のホストから同時に使うときは、uv・npm などのロックが共有のディスク（NFS など）の上で効くことに頼る（未確認）。
+- uv はキャッシュから venv へハードリンクしようとするが、キャッシュと作業ディレクトリは別のマウントのため失敗して警告を出す。最初からコピーにする（`UV_LINK_MODE=copy`）。
+- 作成時の設定はラベル `koya.opts` に `pkg-cache=<ディレクトリ>` として記録する。`--pkg-cache` / `--no-pkg-cache` を付けて既存のコンテナと違えば、ほかのオプションと同じく警告を出す（付けなければ警告しない。この機能より前に作ったコンテナで毎回警告が出ないように）。
+- Windows コンテナ（`--win`）では使わない。Windows コンテナのマウントの上では、uv（Rust 製）のファイルの名前の変更が
+  os error 3 で失敗する（作業ディレクトリでも起きる。Python の `os.replace` は通る。プロセス分離で確認、2026-11-23）。
+  Rust の標準ライブラリが使う POSIX 方式の名前の変更にマウントが対応していないためと見ている（未確認）。
 
 ## GPU
 
@@ -184,6 +207,7 @@ Linux のホストで GPU があれば、Linux コンテナの作成時に自動
 | `--home-scope shared\|project` | 永続ホームの単位 |
 | `--gpu` / `--no-gpu` | GPU を必ず使う / 使わない（省略時は自動判定。Linux のみ） |
 | `--dood` | ホストのランタイムの API のソケットを渡す（DooD: Docker-outside-of-Docker。下記。Linux コンテナのみ） |
+| `--pkg-cache` / `--no-pkg-cache` | パッケージのキャッシュを使う / 使わない（省略時は設定ファイルの `pkg-cache`、既定は使う。Linux コンテナのみ） |
 
 これらはコンテナ作成時にだけ効く。既存のコンテナと違うオプションを指定した場合は、
 警告を出して `koya rm` で作り直すよう促す（作成時の設定はラベル `koya.opts` に記録して比較する）。
