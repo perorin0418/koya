@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ func TestLoad(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "koya"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	conf := "# comment\nhome.dir = ~/koya-home  # trailing\nhome.enable = claude, python\nhome.scope = project\ngpu = off\n"
+	conf := "# comment\nhome.dir = ~/koya-home  # trailing\nhome.enable = claude, python\nhome.scope = project\ngpu = off\npkg-cache = off\npkg-cache.linux.dir = ~/koya-pkg-cache\n"
 	if err := os.WriteFile(filepath.Join(dir, "koya", "config"), []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -30,13 +31,16 @@ func TestLoad(t *testing.T) {
 	if c.GPU != "off" {
 		t.Fatalf("unexpected gpu: %q", c.GPU)
 	}
+	if c.PkgCache || c.PkgCacheDir != "/home/u/koya-pkg-cache" {
+		t.Fatalf("unexpected cache: %v %q", c.PkgCache, c.PkgCacheDir)
+	}
 }
 
 func TestLoadMissingAndInvalid(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	c, err := Load()
-	if err != nil || c.HomeScope != "shared" || c.GPU != "auto" || c.Path != "" {
+	if err != nil || c.HomeScope != "shared" || c.GPU != "auto" || !c.PkgCache || c.PkgCacheDir != DefaultPkgCacheDir() || c.Path != "" {
 		t.Fatalf("missing file must give defaults: %+v %v", c, err)
 	}
 	os.MkdirAll(filepath.Join(dir, "koya"), 0o755)
@@ -77,5 +81,22 @@ func TestHomeRoot(t *testing.T) {
 	writeConf(t, "home.dir = /a\nhome.linux.dir = /b\n")
 	if _, err := Load(); err == nil {
 		t.Fatal("home.dir と home.linux.dir を両方書いたらエラーにすること")
+	}
+}
+
+func TestLoadInvalidPkgCache(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	os.MkdirAll(filepath.Join(dir, "koya"), 0o755)
+	os.WriteFile(filepath.Join(dir, "koya", "config"), []byte("pkg-cache = yes\n"), 0o644)
+	if _, err := Load(); err == nil {
+		t.Fatal("pkg-cache must be on or off")
+	}
+}
+
+func TestDefaultPkgCacheDir(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "/cache")
+	if got := DefaultPkgCacheDir(); goruntime.GOOS == "linux" && got != filepath.Join("/cache", "koya", "pkg-cache") {
+		t.Fatalf("DefaultPkgCacheDir() = %q", got)
 	}
 }

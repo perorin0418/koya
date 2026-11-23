@@ -213,3 +213,32 @@ func TestWinSessionCommand(t *testing.T) {
 		t.Errorf("linux: %v", got)
 	}
 }
+
+func TestRunArgsPkgCache(t *testing.T) {
+	rt := &runtime.Runtime{Kind: "podman", Rootless: true}
+	u := User{Name: "me", UID: 1000, GID: 1000, Home: "/home/me"}
+	s := Spec{Profile: "python", Workdir: "/src/app", Hash: "h", User: u,
+		Opts: Options{PkgCache: "/mnt/pool/koya-pkg-cache/python", Env: []string{"UV_LINK_MODE=hardlink"}}}
+	args := RunArgs(rt, s)
+	got := strings.Join(args, " ")
+	for _, want := range []string{
+		"-v /mnt/pool/koya-pkg-cache/python:/var/cache/koya" + mountSuffix(false),
+		"-e XDG_CACHE_HOME=/var/cache/koya",
+		"-e npm_config_cache=/var/cache/koya/npm",
+		"-e GOMODCACHE=/var/cache/koya/go-mod",
+		"pkg-cache=/mnt/pool/koya-pkg-cache/python",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("RunArgs に %q がありません: %s", want, got)
+		}
+	}
+	// 利用者の -e はキャッシュの環境変数より後ろに置き、上書きできるようにする
+	if strings.Index(got, "-e UV_LINK_MODE=copy") > strings.Index(got, "-e UV_LINK_MODE=hardlink") {
+		t.Errorf("利用者の -e がキャッシュの環境変数より前にあります: %s", got)
+	}
+
+	s.Opts.PkgCache = ""
+	if got := strings.Join(RunArgs(rt, s), " "); strings.Contains(got, PkgCacheMount) || strings.Contains(got, "pkg-cache=") {
+		t.Errorf("キャッシュを使わないのにマウントがあります: %s", got)
+	}
+}

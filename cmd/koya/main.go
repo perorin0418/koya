@@ -87,6 +87,10 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
                    （DooD: Docker-outside-of-Docker。中から作ったコンテナはホストの上で動く）。
                    どちらかを自動で判断し、API のソケットのマウントと DOCKER_HOST などの設定をする。
                    ホストのコンテナをすべて操作できるようになるので、隔離は弱まる（Linux コンテナのみ）
+  --pkg-cache      パッケージのキャッシュを使う（既定。Linux コンテナのみ）
+  --no-pkg-cache   パッケージのキャッシュを使わない
+                   uv・pip・npm・Go などのパッケージのキャッシュを、プロファイルごとに全プロジェクトで共有する
+                   （<pkg-cache.linux.dir>/<プロファイル>/ を /var/cache/koya にマウントする）
 
 そのほかのオプション:
   --session[=名前] セッションの中で動かす。端末が切れても動き続け、同じコマンドか
@@ -113,10 +117,14 @@ const configUsage = `設定ファイル: ~/.config/koya/config（$XDG_CONFIG_HOM
   home.scope  = shared                shared: プロファイルごとに1つ（全プロジェクトで共有）
                                       project: プロジェクトごとに分ける
   gpu         = auto                  auto: GPU があれば使う（既定）/ on: 必ず使う / off: 使わない
+  pkg-cache   = on                    on: パッケージのキャッシュを使う（既定）/ off: 使わない
+  pkg-cache.linux.dir = /mnt/pool/koya-pkg-cache  パッケージのキャッシュの置き場所。<ここ>/<プロファイル>/ をマウントする
+                                       （既定: ~/.cache/koya/pkg-cache）
 
 永続ホームを使うかどうかは、--home / --no-home、home.enable、
 プロファイルの LABEL koya.home="true" の順に決まります。
 GPU を使うかどうかは、--gpu / --no-gpu、gpu の順に決まります（Linux のホストの Linux コンテナのみ）。
+パッケージのキャッシュを使うかどうかは、--pkg-cache / --no-pkg-cache、pkg-cache の順に決まります（Linux コンテナのみ）。
 `
 
 const winUsage = `使い方: koya run --win [プロファイル] [オプション] [-- コマンド...]
@@ -319,7 +327,7 @@ func cmdRun(args []string) error {
 	fs := newFlagSet("run")
 	var opts container.Options
 	var env, ports, vols multiFlag
-	var rm, home, noHome, noSession, win, linux, gpu, noGPU bool
+	var rm, home, noHome, noSession, win, linux, gpu, noGPU, pkgCache, noPkgCache bool
 	var homeScope string
 	fs.StringVar(&opts.Net, "net", "", "")
 	fs.BoolVar(&opts.ReadOnly, "ro", false, "")
@@ -333,6 +341,8 @@ func cmdRun(args []string) error {
 	fs.BoolVar(&gpu, "gpu", false, "")
 	fs.BoolVar(&noGPU, "no-gpu", false, "")
 	fs.BoolVar(&opts.HostRT, "dood", false, "")
+	fs.BoolVar(&pkgCache, "pkg-cache", false, "")
+	fs.BoolVar(&noPkgCache, "no-pkg-cache", false, "")
 	fs.BoolVar(&win, "win", false, "")
 	fs.BoolVar(&linux, "linux", false, "")
 	var session sessionFlag
@@ -359,6 +369,12 @@ func cmdRun(args []string) error {
 	}
 	if opts.HostRT && win {
 		return errors.New("--dood は --win（Windows コンテナ）では使えません")
+	}
+	if pkgCache && noPkgCache {
+		return errors.New("--pkg-cache と --no-pkg-cache は同時に指定できません")
+	}
+	if pkgCache && win {
+		return errors.New("--pkg-cache は --win（Windows コンテナ）では使えません")
 	}
 	if homeScope != "" && homeScope != "shared" && homeScope != "project" {
 		return errors.New("--home-scope は shared か project です")
@@ -468,6 +484,21 @@ func cmdRun(args []string) error {
 		opts.Home = dir
 	}
 
+	// パッケージのキャッシュ: --pkg-cache / --no-pkg-cache → 設定ファイルの pkg-cache の順に決める（Linux コンテナのみ）。
+	// 置き場所は <pkg-cache.linux.dir>/<プロファイル>（全プロジェクトで共有する）。
+	// Windows コンテナでは使わない。マウントの上で uv の名前の変更が os error 3 で失敗するため
+	if (cfg.PkgCache || pkgCache) && !noPkgCache && !win {
+		root := cfg.PkgCacheDir
+		if root == "" {
+			return errors.New("パッケージのキャッシュの置き場所が決められません（設定ファイルに pkg-cache.linux.dir を書くか、--no-pkg-cache を付けてください）")
+		}
+		dir := filepath.Join(root, prof)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("パッケージのキャッシュの置き場所 %s を作れません: %w", dir, err)
+		}
+		opts.PkgCache = dir
+	}
+
 	name := container.Name(prof, wd)
 	info, exists := container.Inspect(rt, name)
 
@@ -544,6 +575,9 @@ func cmdRun(args []string) error {
 		fmt.Fprintf(os.Stderr, "koya: コンテナ %s を作成します\n", name)
 		if opts.Home != "" {
 			fmt.Fprintf(os.Stderr, "koya: 永続ホーム %s を %s にマウントします\n", opts.Home, user.Home)
+		}
+		if opts.PkgCache != "" {
+			fmt.Fprintf(os.Stderr, "koya: パッケージのキャッシュ %s を %s にマウントします\n", opts.PkgCache, container.PkgCacheMount)
 		}
 		if err := container.Create(rt, name, spec); err != nil {
 			return err

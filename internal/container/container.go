@@ -55,6 +55,7 @@ type Options struct {
 	Ports    []string
 	Volumes  []string
 	Home     string // 永続ホームとしてマウントするホストのディレクトリ（空なら使わない）
+	PkgCache string // パッケージのキャッシュとしてマウントするホストのディレクトリ（空なら使わない。Linux コンテナのみ）
 	GPU      bool   // GPU を使えるようにする（Linux コンテナのみ）
 	HostRT   bool   // ホストのランタイム（docker / podman）をコンテナ内から使えるようにする（Linux コンテナのみ）
 }
@@ -80,6 +81,9 @@ func (o Options) Key() string {
 	add("v", o.Volumes)
 	if o.Home != "" {
 		parts = append(parts, "home="+o.Home)
+	}
+	if o.PkgCache != "" {
+		parts = append(parts, "pkg-cache="+o.PkgCache)
 	}
 	if o.GPU {
 		parts = append(parts, "gpu")
@@ -210,6 +214,28 @@ func HomeOf(key string) string {
 	return ""
 }
 
+// パッケージのキャッシュ
+//
+// uv・pip・npm・Go などのパッケージマネージャーのキャッシュを、プロファイルごとのディレクトリ
+// （<pkg-cache.linux.dir>/<プロファイル>）に置き、コンテナ内の PkgCacheMount にマウントする。
+// 全プロジェクト・使い捨てのコンテナ（--rm）で共有し、koya rm でも消さない。
+// 永続ホームと同じくホストのディレクトリにするので、共有のディスクに置けばほかのホストとも共有できる。
+
+// PkgCacheMount はコンテナ内のパッケージのキャッシュの置き場所。
+const PkgCacheMount = "/var/cache/koya"
+
+// pkgCacheEnv は、各種ツールのキャッシュを PkgCacheMount に向ける環境変数。
+// XDG_CACHE_HOME で uv・pip・Go のビルドキャッシュ・corepack など多くのツールが向く。
+// それを見ないものは個別に指定する。
+func pkgCacheEnv() []string {
+	return []string{
+		"XDG_CACHE_HOME=" + PkgCacheMount,
+		"npm_config_cache=" + PkgCacheMount + "/npm", // npm は ~/.npm を使う
+		"GOMODCACHE=" + PkgCacheMount + "/go-mod",    // Go のモジュールは $GOPATH/pkg/mod を使う
+		"UV_LINK_MODE=copy",                          // キャッシュと venv は別のマウントでハードリンクできないので、その警告を出さない
+	}
+}
+
 // GPUOf は Key() の文字列から GPU を使うかを取り出す。
 func GPUOf(key string) bool {
 	for _, p := range strings.Split(key, ";") {
@@ -265,6 +291,13 @@ func RunArgs(rt *runtime.Runtime, s Spec) []string {
 		args = append(args, "-v", s.Opts.Home+":"+s.User.Home+mountSuffix(false))
 	}
 	args = append(args, "-v", mount, "-w", ctrWorkdir)
+	// キャッシュの環境変数は -e より前に置き、利用者が -e で上書きできるようにする
+	if s.Opts.PkgCache != "" {
+		args = append(args, "-v", s.Opts.PkgCache+":"+PkgCacheMount+mountSuffix(false))
+		for _, e := range pkgCacheEnv() {
+			args = append(args, "-e", e)
+		}
+	}
 	args = append(args, userArgs(rt, s.User)...)
 	if s.Opts.Net != "" {
 		args = append(args, "--network", s.Opts.Net)

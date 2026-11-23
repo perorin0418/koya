@@ -86,6 +86,7 @@ koya help [コマンド]
 | `--home-scope shared\|project` | 永続ホームをプロファイルごとに共有するか、プロジェクトごとに分けるか |
 | `--gpu` / `--no-gpu` | GPU を必ず使う / 使わない（省略時は GPU があれば自動で使う。Linux のみ、下記） |
 | `--dood` | ホストの docker / podman をコンテナ内から使えるようにする（DooD: Docker-outside-of-Docker。Linux コンテナのみ、下記） |
+| `--pkg-cache` / `--no-pkg-cache` | パッケージのキャッシュを使う（既定）/ 使わない（Linux コンテナのみ、下記） |
 
 ### 既定のプロファイル
 
@@ -185,6 +186,40 @@ RUN dnf install -y postgresql sqlite \
 - `$HOME` の下には何も入れないでください（ユーザーは koya が作成時に登録し、永続ホームでも隠れるため）。
 - `LABEL koya.home="true"` を付けると、そのプロファイルでは永続ホームが既定で有効になります。
 - `LABEL koya.session="true"` を付けると、そのプロファイルではセッション（`--session`）が既定で有効になります。
+
+## パッケージのキャッシュ（Linux コンテナ）
+
+uv・pip・npm・Go などのパッケージマネージャーが取ってきたパッケージやビルドのキャッシュを、プロファイルごとのディレクトリに置きます。
+同じプロファイルなら全プロジェクトと使い捨てのコンテナ（`--rm`）で共有し、`koya rm` でコンテナを消しても残るので、
+2回目以降のセットアップ（`uv sync`、`npm ci`、`go mod download` など）が速くなります。既定で有効です。
+
+置き場所は `<pkg-cache.linux.dir>/<プロファイル名>/` です（既定は `~/.cache/koya/pkg-cache`。`$XDG_CACHE_HOME` があればその下。macOS は `~/Library/Caches/koya/pkg-cache`、Windows は `%LOCALAPPDATA%\koya\pkg-cache`）。
+どのホストからも同じパスで見える共有のディスクを指定すれば、複数のホストでキャッシュを共有できます。
+
+```ini
+# ~/.config/koya/config
+pkg-cache           = on                        # on: 使う（既定）/ off: 使わない
+pkg-cache.linux.dir = /mnt/pool/koya-pkg-cache  # 置き場所（既定: ~/.cache/koya/pkg-cache）
+```
+
+コンテナ内では `/var/cache/koya` にマウントし、次の環境変数を設定します（`-e` で上書きできます）。
+
+| 環境変数 | 値 | 対象 |
+|---|---|---|
+| `XDG_CACHE_HOME` | `/var/cache/koya` | uv、pip、Go のビルドキャッシュ、corepack など |
+| `npm_config_cache` | `/var/cache/koya/npm` | npm |
+| `GOMODCACHE` | `/var/cache/koya/go-mod` | Go のモジュール |
+| `UV_LINK_MODE` | `copy` | uv（キャッシュと作業ディレクトリは別のマウントでハードリンクできないため、その警告を出さない） |
+
+```bash
+koya run python --no-pkg-cache                # 使わない
+rm -rf ~/.cache/koya/pkg-cache/python         # キャッシュを消す
+```
+
+- コンテナを作るときだけ効きます。この機能より前に作ったコンテナで使うには、`koya rm -f <プロファイル>` してから作り直します。
+- 永続ホームを使うプロファイルでも、キャッシュは永続ホームの `~/.cache` ではなくこちらに置きます（初回だけダウンロードし直しになります）。
+- 複数のホストから同時に使うと、キャッシュのロック（排他制御）が共有のディスク（NFS など）の上で効くかどうかに頼ることになります（確認していません）。
+- Windows コンテナ（`--win`）では使いません。Windows コンテナのマウントの上では、uv のファイルの名前の変更が os error 3 で失敗するためです。
 
 ## GPU（Linux）
 

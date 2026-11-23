@@ -7,6 +7,8 @@
 //	home.enable = claude, python        # 既定で永続ホームを使うプロファイル（all で全部）
 //	home.scope  = shared                # shared（プロファイルごと）/ project（プロジェクトごと）
 //	gpu         = auto                  # auto（あれば使う）/ on（必ず使う）/ off（使わない）
+//	pkg-cache   = on                    # on（プロファイルごとのパッケージのキャッシュを使う。既定）/ off
+//	pkg-cache.linux.dir = /mnt/pool/koya-pkg-cache   # パッケージのキャッシュの置き場所（既定: ~/.cache/koya/pkg-cache）
 package config
 
 import (
@@ -20,12 +22,14 @@ import (
 
 // Config は koya の設定。
 type Config struct {
-	HomeDir    string   // 永続ホームの置き場所（Linux コンテナ用）
-	WinHomeDir string   // 永続ホームの置き場所（Windows コンテナ用）。空なら HomeDir + "-win"
-	HomeEnable []string // 既定で永続ホームを使うプロファイル
-	HomeScope  string   // shared / project
-	GPU        string   // auto / on / off
-	Path       string   // 読み込んだファイル（なければ空）
+	HomeDir     string   // 永続ホームの置き場所（Linux コンテナ用）
+	WinHomeDir  string   // 永続ホームの置き場所（Windows コンテナ用）。空なら HomeDir + "-win"
+	HomeEnable  []string // 既定で永続ホームを使うプロファイル
+	HomeScope   string   // shared / project
+	GPU         string   // auto / on / off
+	PkgCache    bool     // プロファイルごとのパッケージのキャッシュを使う（Linux コンテナのみ）
+	PkgCacheDir string   // パッケージのキャッシュの置き場所（Linux コンテナ用）。この下にプロファイルごとのディレクトリを作る
+	Path        string   // 読み込んだファイル（なければ空）
 }
 
 // Dir は設定ディレクトリ。
@@ -62,9 +66,20 @@ func DefaultHomeDir() string {
 	return filepath.Join(base, "koya", "home")
 }
 
+// DefaultPkgCacheDir はパッケージのキャッシュの既定の置き場所（OS のキャッシュの置き場所の下）。
+// Linux: $XDG_CACHE_HOME/koya/pkg-cache（既定 ~/.cache/koya/pkg-cache）、macOS: ~/Library/Caches/koya/pkg-cache、
+// Windows: %LOCALAPPDATA%\koya\pkg-cache
+func DefaultPkgCacheDir() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "koya", "pkg-cache")
+}
+
 // Load は設定ファイルを読む。ファイルがなければ既定値を返す。
 func Load() (*Config, error) {
-	c := &Config{HomeDir: DefaultHomeDir(), HomeScope: "shared", GPU: "auto"}
+	c := &Config{HomeDir: DefaultHomeDir(), HomeScope: "shared", GPU: "auto", PkgCache: true, PkgCacheDir: DefaultPkgCacheDir()}
 	path := filepath.Join(Dir(), "config")
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -117,6 +132,13 @@ func Load() (*Config, error) {
 				return nil, fmt.Errorf("%s:%d: gpu は auto・on・off のどれかです", path, n)
 			}
 			c.GPU = v
+		case "pkg-cache":
+			if v != "on" && v != "off" {
+				return nil, fmt.Errorf("%s:%d: pkg-cache は on か off です", path, n)
+			}
+			c.PkgCache = v == "on"
+		case "pkg-cache.linux.dir":
+			c.PkgCacheDir = expandHome(v)
 		default:
 			return nil, fmt.Errorf("%s:%d: 不明なキー %q", path, n, k)
 		}
