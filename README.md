@@ -189,7 +189,7 @@ RUN dnf install -y postgresql sqlite \
 
 ## パッケージのキャッシュ（Linux コンテナ）
 
-uv・pip・npm・Go などのパッケージマネージャーが取ってきたパッケージやビルドのキャッシュを、プロファイルごとのディレクトリに置きます。
+uv・pip・npm・Go・dnf などのパッケージマネージャーが取ってきたパッケージやビルドのキャッシュを、プロファイルごとのディレクトリに置きます。
 同じプロファイルなら全プロジェクトと使い捨てのコンテナ（`--rm`）で共有し、`koya rm` でコンテナを消しても残るので、
 2回目以降のセットアップ（`uv sync`、`npm ci`、`go mod download` など）が速くなります。既定で有効です。
 
@@ -211,15 +211,31 @@ pkg-cache.linux.dir = /mnt/pool/koya-pkg-cache  # 置き場所（既定: ~/.cach
 | `GOMODCACHE` | `/var/cache/koya/go-mod` | Go のモジュール |
 | `UV_LINK_MODE` | `copy` | uv（キャッシュと作業ディレクトリは別のマウントでハードリンクできないため、その警告を出さない） |
 
+dnf（`sudo dnf install` など）のキャッシュも `/var/cache/koya/dnf` に置きます。
+dnf は環境変数ではキャッシュの置き場所を変えられないので、コンテナを作るときに dnf5 の設定の追加ファイル
+`/etc/dnf/libdnf5.conf.d/90-koya-pkg-cache.conf` を書き、`system_cachedir` をそこに向けます。
+あわせて `keepcache=True` にして、ダウンロードした rpm を残します（同じ版をもう一度入れるときはダウンロードしません）。
+dnf5 でないイメージ（dnf4 や dnf のないもの）では何もしません。
+
 ```bash
 koya run python --no-pkg-cache                # 使わない
-rm -rf ~/.cache/koya/pkg-cache/python         # キャッシュを消す
+rm -rf ~/.cache/koya/pkg-cache/python         # キャッシュを消す（dnf の分を除く。下記）
+```
+
+dnf のキャッシュ（`<プロファイル>/dnf`）はコンテナ内の root が書くため、ホストのユーザーの持ち物になりません
+（rootless の podman では subuid、rootful の docker では root の持ち物）。消すときは次のようにします。
+
+```bash
+podman unshare rm -rf ~/.cache/koya/pkg-cache/python/dnf   # rootless の podman
+sudo rm -rf ~/.cache/koya/pkg-cache/python/dnf             # rootful の docker / podman
 ```
 
 - コンテナを作るときだけ効きます。この機能より前に作ったコンテナで使うには、`koya rm -f <プロファイル>` してから作り直します。
 - 永続ホームを使うプロファイルでも、キャッシュは永続ホームの `~/.cache` ではなくこちらに置きます（初回だけダウンロードし直しになります）。
 - 複数のホストから同時に使うと、キャッシュのロック（排他制御）が共有のディスク（NFS など）の上で効くかどうかに頼ることになります（確認していません）。
 - Windows コンテナ（`--win`）では使いません。Windows コンテナのマウントの上では、uv のファイルの名前の変更が os error 3 で失敗するためです。
+- dnf の rpm は自動では消えず、古い版がたまっていきます。コンテナの中で `sudo dnf clean packages` を実行するか、上のとおりディレクトリを消します。
+- 同じプロファイルの複数のコンテナで同時に `dnf install` したときに、dnf のキャッシュが壊れないかは確認していません。
 
 ## GPU（Linux）
 

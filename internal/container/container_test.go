@@ -3,6 +3,9 @@ package container
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -211,6 +214,39 @@ func TestWinSessionCommand(t *testing.T) {
 	}
 	if got := SessionCommand(false, "x", nil); got[0] != "sh" {
 		t.Errorf("linux: %v", got)
+	}
+}
+
+func TestDNFCacheScript(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh がありません")
+	}
+	confdir := filepath.Join(t.TempDir(), "libdnf5.conf.d")
+	run := func() {
+		t.Helper()
+		if out, err := exec.Command(sh, "-c", dnfCacheScript, "koya-dnf-cache", confdir, DNFCacheDir).CombinedOutput(); err != nil {
+			t.Fatalf("スクリプトが失敗しました: %v\n%s", err, out)
+		}
+	}
+
+	// 追加ファイルのディレクトリがない（dnf5 でない）なら何もしない
+	run()
+	if _, err := os.Stat(confdir); !os.IsNotExist(err) {
+		t.Fatalf("dnf5 でないのにディレクトリを作りました: %v", err)
+	}
+
+	if err := os.Mkdir(confdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run()
+	run() // 2回書いても同じ内容になる
+	b, err := os.ReadFile(filepath.Join(confdir, "90-koya-pkg-cache.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[main]\nsystem_cachedir=/var/cache/koya/dnf\nkeepcache=True\n"; string(b) != want {
+		t.Errorf("設定ファイルの内容が違います:\n%s", b)
 	}
 }
 

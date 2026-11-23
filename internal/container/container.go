@@ -236,6 +236,35 @@ func pkgCacheEnv() []string {
 	}
 }
 
+// dnf のキャッシュ
+//
+// dnf は root で動き、キャッシュの置き場所を環境変数では変えられない（設定の system_cachedir で決まる。既定は /var/cache/libdnf5）。
+// そこで、コンテナの作成時に dnf5 の設定の追加ファイル（drop-in）を書き、キャッシュを PkgCacheMount の下に向ける。
+// 既定ではインストールの後に rpm を消すので、keepcache=True で残す（同じ版をもう一度入れるときにダウンロードしない）。
+// dnf5 の追加ファイルのディレクトリ（libdnf5 が作る）がないイメージ（dnf4 や dnf のないイメージ）では何もしない。
+
+// DNFCacheDir はコンテナ内の dnf のキャッシュの置き場所。
+const DNFCacheDir = PkgCacheMount + "/dnf"
+
+// dnfConfDir は dnf5 の設定の追加ファイルのディレクトリ。
+const dnfConfDir = "/etc/dnf/libdnf5.conf.d"
+
+// dnfCacheScript は dnf5 のキャッシュの設定を書く（root で実行する）。
+// 引数: 追加ファイルのディレクトリ キャッシュの置き場所
+const dnfCacheScript = `
+confdir=$1; cachedir=$2
+[ -d "$confdir" ] || exit 0
+printf '[main]\nsystem_cachedir=%s\nkeepcache=True\n' "$cachedir" > "$confdir/90-koya-pkg-cache.conf"
+`
+
+// setupDNFCache は dnf のキャッシュを DNFCacheDir に向ける。
+func setupDNFCache(rt *runtime.Runtime, name string) error {
+	if err := rt.Quiet("exec", "-u", "0", name, "sh", "-c", dnfCacheScript, "koya-dnf-cache", dnfConfDir, DNFCacheDir); err != nil {
+		return fmt.Errorf("dnf のキャッシュの設定に失敗しました: %w", err)
+	}
+	return nil
+}
+
 // GPUOf は Key() の文字列から GPU を使うかを取り出す。
 func GPUOf(key string) bool {
 	for _, p := range strings.Split(key, ";") {
@@ -526,6 +555,12 @@ func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
 	if err := Setup(rt, name, s.User); err != nil {
 		_ = rt.Quiet("rm", "-f", name)
 		return err
+	}
+	// dnf のキャッシュは無くても困らないので、失敗しても警告だけにする
+	if s.Opts.PkgCache != "" {
+		if err := setupDNFCache(rt, name); err != nil {
+			fmt.Fprintf(os.Stderr, "koya: 警告: %v\n", err)
+		}
 	}
 	return nil
 }
