@@ -74,6 +74,11 @@ func DetectHostRuntime(rt *runtime.Runtime, u User, prof string) (h *HostRuntime
 	if rt.Windows {
 		return nil, "", errors.New("--dood は --win（Windows コンテナ）では使えません")
 	}
+	if rt.Kind == "nerdctl" {
+		// containerd のソケットは docker の API を話さない。nerdctl をコンテナ内で動かすには
+		// ソケットのほかに CNI やホストの /var/lib/nerdctl なども要り、rootless ではソケットに外から入れない
+		return nil, "", errors.New("--dood は nerdctl では使えません（containerd には docker 互換の API のソケットがないため）")
+	}
 	h = &HostRuntime{Kind: rt.Kind, GID: -1}
 	if rt.Kind == "podman" {
 		h.Socket, err = podmanSocket(rt)

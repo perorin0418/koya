@@ -16,7 +16,7 @@ python   running  koya-python-myapp-3fa2b91c
 
 ## インストール
 
-podman か docker が必要です。Linux・macOS・Windows で動きます。
+podman・docker・nerdctl のどれかが必要です。Linux・macOS・Windows で動きます（nerdctl については[下記](#nerdctl)）。
 [Releases](https://github.com/perorin0418/koya/releases) からバイナリを取ってくるか、Go で入れます。
 
 ```bash
@@ -289,6 +289,21 @@ koya run python -- podman-remote run --rm hello-world       # ホストのラン
   毎回使うなら、ユーザー定義プロファイルの Dockerfile で `RUN dnf install -y podman-remote` などとしておきます。
 - 判定はコンテナを作るときだけ行います。既存のコンテナで使うには、`koya rm -f <プロファイル>` してから作り直します。
 - `--win`（Windows コンテナ）では使えません。Windows で Linux コンテナを使う場合（Docker Desktop・Podman Desktop）は使えます。
+- nerdctl では使えません（containerd には docker 互換の API のソケットがないため）。
+
+## nerdctl
+
+nerdctl（containerd 用の docker 互換の CLI。Rancher Desktop でコンテナエンジンに containerd を選んだときなど）でも動きます。
+podman も docker もないときに自動で使います。両方あるときに nerdctl を使うには `KOYA_RUNTIME=nerdctl` とします。
+
+- `koya build` には BuildKit（nerdctl build が使うビルドの仕組み）が要ります。プロファイルは親のイメージ（`FROM localhost/koya/base` など）を
+  ローカルから使うので、BuildKit は containerd ワーカーで、nerdctl と同じ名前空間に向けて動かしてください
+  （rootless なら `CONTAINERD_NAMESPACE=default containerd-rootless-setuptool.sh install-buildkit-containerd`）。
+  OCI ワーカーでは親のイメージが見えず、ビルドに失敗します。
+- コンテナの PID 1 には `--init`（tini）を使います。tini がランタイムの動くマシンにないときは、警告を出して `--init` なしで作ります
+  （止めるのに 2 秒ほどかかり、終わったプロセスが片づけられずに残ります）。
+- rootless の nerdctl では、rootless の docker と同じくコンテナ内で UID 0 として動かします（作ったファイルはホストのユーザーの持ち物になります）。
+- `--dood` は使えません。
 
 ## Windows
 
@@ -368,7 +383,7 @@ koya win status                # デーモンとホストの状態
 
 ## 止まったとき（`--verbose`）
 
-どのコマンドにも `--verbose` を付けると、koya がランタイム（podman / docker）に渡すコマンドと、
+どのコマンドにも `--verbose` を付けると、koya がランタイム（podman / docker / nerdctl）に渡すコマンドと、
 かかった時間・結果を表示します。終わらないコマンドは 10 秒ごとに「実行中」と表示するので、
 どこで止まっているかが分かります。環境変数 `KOYA_VERBOSE=1` でも同じです。
 
@@ -389,7 +404,7 @@ ssh でつなぐときのコマンドに ``exec `$SHELL -l` `` のようにバ�
 
 | 名前 | 意味 |
 |---|---|
-| `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` など）。既定は podman → docker の順に自動検出 |
+| `KOYA_RUNTIME` | 使うランタイム（`podman` / `docker` / `nerdctl`）。既定は podman → docker → nerdctl の順に自動検出。名前に podman・nerdctl を含まないコマンドは docker の CLI として扱う |
 | `KOYA_PROFILE` | 既定のプロファイル |
 | `KOYA_VERBOSE` | 設定すると `--verbose` と同じく詳細ログを表示する |
 | `KOYA_WIN_PROFILE` | `--win` のときの既定のプロファイル |

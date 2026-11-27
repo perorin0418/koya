@@ -46,3 +46,18 @@ func TestCommandLineQuotesAndShortens(t *testing.T) {
 		t.Errorf("got %s, want %s", got, want)
 	}
 }
+
+func TestKindOf(t *testing.T) {
+	for bin, want := range map[string]string{
+		"podman":                 "podman",
+		"/usr/bin/podman-remote": "podman",
+		"docker":                 "docker",
+		"nerdctl":                "nerdctl",
+		`C:\bin\nerdctl.exe`:     "nerdctl",
+		"/usr/local/bin/nerdctl": "nerdctl",
+	} {
+		if got := KindOf(bin); got != want {
+			t.Errorf("KindOf(%q) = %q, want %q", bin, got, want)
+		}
+	}
+}
