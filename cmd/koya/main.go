@@ -50,7 +50,7 @@ const usage = `koya - カレントディレクトリをマウントした用途�
   koya version                   バージョンを表示する
   koya help [コマンド]            ヘルプを表示する
 
-どのコマンドにも --verbose を付けられます。ランタイム（podman / docker）に渡すコマンドと、
+どのコマンドにも --verbose を付けられます。ランタイム（podman / docker / nerdctl）に渡すコマンドと、
 かかった時間・結果を表示します。終わらないコマンドは 10 秒ごとに「実行中」と表示します。
 
 プロファイルを省略したときは、上の階層へたどって見つかる .koya ファイル、
@@ -60,7 +60,7 @@ run・ls・stop・rm・container・image・profiles・build は、--linux（Linu
 --win（Windows コンテナ。Windows のみ。koya help win）で対象を選びます。
 
 環境変数:
-  KOYA_RUNTIME   使うランタイム（podman / docker）。既定は podman → docker の順に自動検出
+  KOYA_RUNTIME   使うランタイム（podman / docker / nerdctl）。既定は podman → docker → nerdctl の順に自動検出
   KOYA_PROFILE   既定のプロファイル
   KOYA_NO_UPDATE_CHECK  設定すると、起動時に新しい版を確かめない
   KOYA_VERBOSE   設定すると、--verbose と同じく詳細ログを表示する
@@ -86,7 +86,7 @@ const runUsage = `使い方: koya run [プロファイル] [オプション] [--
   --dood           ホストのランタイム（docker / podman）をコンテナ内から使えるようにする
                    （DooD: Docker-outside-of-Docker。中から作ったコンテナはホストの上で動く）。
                    どちらかを自動で判断し、API のソケットのマウントと DOCKER_HOST などの設定をする。
-                   ホストのコンテナをすべて操作できるようになるので、隔離は弱まる（Linux コンテナのみ）
+                   ホストのコンテナをすべて操作できるようになるので、隔離は弱まる（Linux コンテナのみ。nerdctl では使えない）
   --pkg-cache      パッケージのキャッシュを使う（既定。Linux コンテナのみ）
   --no-pkg-cache   パッケージのキャッシュを使わない
                    uv・pip・npm・Go・dnf などのパッケージのキャッシュを、プロファイルごとに全プロジェクトで共有する

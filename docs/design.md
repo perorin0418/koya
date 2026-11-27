@@ -17,7 +17,7 @@ $ koya run node -- npm test   # node 用の環境でコマンドを1つ実行す
 |---|---|---|
 | 実装言語 | Go（標準ライブラリのみ） | 単一バイナリで配布できる。`go:embed` で Dockerfile を同梱できる |
 | イメージの同梱方法 | Dockerfile をバイナリに埋め込み、初回利用時にローカルでビルドする | イメージ本体（数百MB）を配布物に含めずに済む。レジストリにも依存しない |
-| コンテナランタイム | podman → docker の順に自動検出。`KOYA_RUNTIME` で指定も可 | どちらでも動かす。CLI の差分は小さい |
+| コンテナランタイム | podman → docker → nerdctl の順に自動検出。`KOYA_RUNTIME` で指定も可 | どれでも動かす。CLI の差分は小さい（nerdctl は docker の CLI とほぼ同じに扱い、違うところだけ分ける） |
 | コンテナの寿命 | 永続（作業ディレクトリ×プロファイルごとに1つ）。明示的に `koya rm` で消す | 入れたパッケージや履歴が次回も残る。毎回作り直すと遅い |
 | 使い捨て実行 | `--rm` を付けると終了時に削除 | 一時的な検証用 |
 
@@ -59,8 +59,8 @@ koya-<プロファイル>-<ディレクトリ名>-<絶対パスの SHA-256 先�
 | ランタイム | 起動の引数 | コンテナ内の UID |
 |---|---|---|
 | podman CLI（rootless） | `--userns=keep-id --user <UID>:<GID>` | ホストと同じ UID |
-| docker CLI で rootless のランタイム（rootless docker、docker CLI からつないだ rootless podman） | `--user 0:0` | 0 |
-| rootful docker / podman | `--user <UID>:<GID>` | ホストと同じ UID |
+| docker CLI で rootless のランタイム（rootless docker、docker CLI からつないだ rootless podman）、rootless の nerdctl | `--user 0:0` | 0 |
+| rootful docker / podman / nerdctl | `--user <UID>:<GID>` | ホストと同じ UID |
 
 - docker CLI は `--userns=keep-id` を受け付けないため、rootless のランタイムを docker CLI から使う場合は
   UID 0 で動かす（rootless ではコンテナ内の root がホストのユーザーに対応するため、作ったファイルはホストのユーザーの所有になる）。
@@ -177,6 +177,8 @@ Linux のホストで GPU があれば、Linux コンテナの作成時に自動
 - SELinux が有効なホストでもソケットを開けるように `--security-opt label=disable` を付ける。
 - クライアント（docker-cli・podman-remote）はイメージに入れない。作成後になければ入れ方を表示する。
 - `--win` では使えない（名前付きパイプのマウントは未対応）。
+- nerdctl では使えない。containerd のソケットは docker 互換の API を話さず、コンテナ内で nerdctl を動かすには
+  ソケットのほかに CNI やホストの `/var/lib/nerdctl` なども要る。rootless ではソケットが rootlesskit の名前空間の中にあり、外から入れない。
 
 ## プロファイル（同梱イメージ）
 
@@ -260,7 +262,7 @@ koya help [コマンド]
 
 ```
 koya run python
-  1. ランタイムを検出する（podman / docker）
+  1. ランタイムを検出する（podman / docker / nerdctl）
   2. プロファイル python を解決する（ユーザー定義 → 同梱）
   3. イメージ localhost/koya/python があるか、koya.hash が一致するかを確認し、必要ならビルドする（依存の base も）
   4. コンテナ名を決める（koya-python-myapp-3fa2b91c）
@@ -275,6 +277,8 @@ koya run python
 
 コンテナは `sleep infinity` で常駐させ、操作はすべて `exec` で行う。複数の端末から同じ環境に入れる。
 （PID 1 にはランタイムの `--init` を使い、ゾンビプロセスを回収させる）
+nerdctl の `--init` は、ランタイムが動くマシンの tini を使う。tini がなくて失敗したときは、警告して `--init` なしで作り直す
+（常駐はできる。止めるときに `stop` のタイムアウトまで待つことと、ゾンビプロセスが残ることだけが違う）。
 
 ## セッション
 

@@ -1,4 +1,4 @@
-// Package runtime はコンテナランタイム（podman / docker）の検出と呼び出しを扱う。
+// Package runtime はコンテナランタイム（podman / docker / nerdctl）の検出と呼び出しを扱う。
 package runtime
 
 import (
@@ -14,7 +14,7 @@ import (
 // Runtime は検出したコンテナランタイム。
 type Runtime struct {
 	Bin      string   // 実行ファイルのパス
-	Kind     string   // "podman" または "docker"
+	Kind     string   // "podman"・"docker"・"nerdctl" のいずれか
 	Rootless bool     // rootless で動いているか
 	Prefix   []string // すべてのコマンドの前に付ける引数（つなぐデーモンの指定など）
 	Windows  bool     // Windows コンテナ用のデーモン（koya run --win）につないでいるか
@@ -31,10 +31,10 @@ func (r *Runtime) argv(args []string) []string {
 	return append(append([]string(nil), r.Prefix...), args...)
 }
 
-// Detect は KOYA_RUNTIME、なければ podman → docker の順にランタイムを探す。
+// Detect は KOYA_RUNTIME、なければ podman → docker → nerdctl の順にランタイムを探す。
 func Detect() (*Runtime, error) {
 	want := os.Getenv("KOYA_RUNTIME")
-	candidates := []string{"podman", "docker"}
+	candidates := []string{"podman", "docker", "nerdctl"}
 	if want != "" {
 		candidates = []string{want}
 	}
@@ -43,17 +43,28 @@ func Detect() (*Runtime, error) {
 		if err != nil {
 			continue
 		}
-		r := &Runtime{Bin: p, Kind: "docker"}
-		if strings.Contains(filepath.Base(c), "podman") {
-			r.Kind = "podman"
-		}
+		r := &Runtime{Bin: p, Kind: KindOf(c)}
 		r.Rootless = r.detectRootless()
 		return r, nil
 	}
 	if want != "" {
 		return nil, fmt.Errorf("KOYA_RUNTIME=%s が見つかりません", want)
 	}
-	return nil, errors.New("podman も docker も見つかりません。どちらかをインストールしてください")
+	return nil, errors.New("podman・docker・nerdctl のどれも見つかりません。どれかをインストールしてください")
+}
+
+// KindOf はランタイムのコマンド名（パスでもよい）から種類を決める。
+// podman・nerdctl 以外は docker の CLI として扱う。
+func KindOf(bin string) string {
+	base := filepath.Base(bin)
+	switch {
+	case strings.Contains(base, "podman"):
+		return "podman"
+	case strings.Contains(base, "nerdctl"):
+		return "nerdctl"
+	default:
+		return "docker"
+	}
 }
 
 func (r *Runtime) detectRootless() bool {
@@ -61,7 +72,8 @@ func (r *Runtime) detectRootless() bool {
 		out, err := r.Output("info", "--format", "{{.Host.Security.Rootless}}")
 		return err == nil && strings.TrimSpace(out) == "true"
 	}
-	// docker（rootless docker や、docker CLI から rootless podman につないでいる場合を含む）
+	// docker（rootless docker や、docker CLI から rootless podman につないでいる場合を含む）と nerdctl。
+	// rootless の nerdctl も SecurityOptions に name=rootless を返す
 	out, err := r.Output("info", "--format", "{{json .SecurityOptions}}")
 	return err == nil && strings.Contains(out, "rootless")
 }

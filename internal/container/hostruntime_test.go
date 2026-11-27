@@ -108,3 +108,10 @@ func TestRunArgsHostRuntime(t *testing.T) {
 		t.Error("socket must be mounted with Opts.HostRT")
 	}
 }
+
+func TestDetectHostRuntimeNerdctl(t *testing.T) {
+	_, _, err := DetectHostRuntime(&runtime.Runtime{Kind: "nerdctl"}, User{}, "base")
+	if err == nil || !strings.Contains(err.Error(), "nerdctl") {
+		t.Errorf("nerdctl must be rejected: %v", err)
+	}
+}

@@ -543,13 +543,13 @@ func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
 	if rt.Windows {
 		return createWin(rt, name, s, labels)
 	}
-	args := []string{"run", "-d", "--init", "--name", name, "--entrypoint", "sleep"}
+	args := []string{"run", "-d", "--name", name, "--entrypoint", "sleep"}
 	for _, l := range labels {
 		args = append(args, "--label", l)
 	}
 	args = append(args, RunArgs(rt, s)...)
 	args = append(args, profile.ImageName(s.Profile), "infinity")
-	if err := rt.Quiet(args...); err != nil {
+	if err := runInit(rt, name, args); err != nil {
 		return err
 	}
 	if err := Setup(rt, name, s.User); err != nil {
@@ -563,6 +563,22 @@ func Create(rt *runtime.Runtime, name string, s Spec, labels ...string) error {
 		}
 	}
 	return nil
+}
+
+// runInit は args（run の引数）に --init を付けてコンテナを作る。
+// --init は PID 1 の sleep の代わりにシグナルを伝え、exec で残ったプロセスを片づける。
+// nerdctl の --init はランタイムが動くマシンの tini を使うので、tini がなければ --init なしで作り直す
+// （止めるときに stop のタイムアウトまで待つ・終わったプロセスが残る、だけで動きはする）。
+func runInit(rt *runtime.Runtime, name string, args []string) error {
+	withInit := append([]string{args[0], "--init"}, args[1:]...)
+	err := rt.Quiet(withInit...)
+	if err == nil || rt.Kind != "nerdctl" || !strings.Contains(err.Error(), "tini") {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "koya: 警告: nerdctl の --init に使う tini が見つからないため、--init なしでコンテナを作ります"+
+		"（tini をランタイムが動くマシンの PATH に入れると、コンテナを止めるのが速くなります）: %v\n", err)
+	_ = rt.Quiet("rm", "-f", name)
+	return rt.Quiet(args...)
 }
 
 // createWin は Windows コンテナを作って起動する。ユーザーの登録はしない。
